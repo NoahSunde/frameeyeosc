@@ -538,8 +538,10 @@ impl StatusFile {
             let mut watch = self.settings.lock().unwrap();
             let settings = watch.get();
             if let Some(l) = &self.live {
-                // lid_veto may be edited by hand: the worker picks it up from here, on its next frame.
+                // lid_veto and search_box may be edited by hand: the worker picks them up from here, on its next frame.
                 l.lid_veto.store(settings.lid_veto, Ordering::Relaxed);
+                *l.search_box.lock().unwrap() = settings.search_box;
+                s.search_box = settings.search_box;
             }
             drop(watch);
             s.dev = settings.dev;
@@ -789,6 +791,25 @@ fn set_lid_veto(on: bool, status: &Mutex<Status>, file: &StatusFile) -> String {
     "ok".into()
 }
 
+/// `set search_box left|right auto|<x0> <y0> <x1> <y1>`: one eye's fixed pupil search window, done here in every
+/// state like `set lid_veto`: saved in settings.json (the rest of the file, and the other eye's box, kept) and handed
+/// to the worker at once. The fake daemon (no live engine) shows it but saves nothing.
+fn set_search_box(eye: usize, b: Option<eyecam::feat::SearchBox>, status: &Mutex<Status>, file: &StatusFile) -> String {
+    if let Some(l) = &file.live {
+        let path = settings::path();
+        if let Err(e) = Settings::update(&path, |s| s.search_box[eye] = b) {
+            return format!("err 保存できなかった: {e}");
+        }
+        // (status.json follows the file from the next write, as for `set lid_veto`)
+        let mut watch = file.settings.lock().unwrap();
+        *watch = settings::Watch::new(path);
+        l.search_box.lock().unwrap()[eye] = b;
+        drop(watch);
+    }
+    status.lock().unwrap().search_box[eye] = b;
+    "ok".into()
+}
+
 /// `preview on` / `preview off`: the panel's eye preview, done here in every state (the live worker makes the pictures
 /// while frames come, and stops by itself preview::HOLD after the last `on`). Refused where the run folder isn't on
 /// tmpfs. The fake daemon (no live engine) says ok and makes none.
@@ -854,6 +875,7 @@ fn ctl_reply(
         }
         Ok(Command::SetWidenSensitivity(v)) => set_widen_sensitivity(v, status, file),
         Ok(Command::SetLidVeto(on)) => set_lid_veto(on, status, file),
+        Ok(Command::SetSearchBox(eye, b)) => set_search_box(eye, b, status, file),
         Ok(Command::Preview(on)) => set_preview(on, file),
         Ok(Command::DriftLogOn(stem)) => set_driftlog(true, stem.as_deref(), file),
         Ok(Command::DriftLogOff) => set_driftlog(false, None, file),
@@ -876,6 +898,7 @@ fn serve(args: &Args) -> Result<()> {
         let settings = Settings::load(&settings::path());
         shared.set_widen_sensitivity(settings.widen_sensitivity);
         shared.lid_veto.store(settings.lid_veto, Ordering::Relaxed);
+        *shared.search_box.lock().unwrap() = settings.search_box;
         shared.driftlog.lock().unwrap().dir = args.out.join(driftlog::DIR_NAME);
     }
     let mut daemon = Daemon::start(&args.run_dir, (!args.fake).then(|| shared.clone()), &args.out, args.fake)?;
@@ -1253,6 +1276,7 @@ fn idle(
                 // Answered by the control thread; never sent here.
                 Command::SetWidenSensitivity(_)
                 | Command::SetLidVeto(_)
+                | Command::SetSearchBox(..)
                 | Command::Preview(_)
                 | Command::DriftLogOn(_)
                 | Command::DriftLogOff

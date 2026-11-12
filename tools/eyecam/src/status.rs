@@ -199,6 +199,9 @@ pub struct Status {
     pub calib_saved: bool,
     /// 0 (strictest) .. 1 (most sensitive), `set widen_sensitivity`.
     pub widen_sensitivity: f64,
+    /// Each eye's fixed pupil search window (left, right), `set search_box` (settings.json): `"search_box":[null,[x0,
+    /// y0,x1,y1]]` in upright frame px, null where the window follows the picture.
+    pub search_box: [Option<crate::feat::SearchBox>; 2],
     /// Developer mode (`"dev": true` in settings.json, edited by hand): calibrations also keep their eye images.
     pub dev: bool,
     /// A `calib wear` has succeeded at least once (kept in calib.json): the panel's first-time setup is done.
@@ -307,6 +310,7 @@ impl Default for Status {
             warmup_remaining_s: crate::live::WARMUP_S,
             calib_saved: false,
             widen_sensitivity: crate::live::DEFAULT_WIDEN_SENSITIVITY,
+            search_box: [None, None],
             dev: false,
             setup_done: false,
             last_calib_widen: "",
@@ -362,7 +366,7 @@ impl Status {
             "{{\"version\":1,\"state\":{},\"message\":{},\"message_en\":{},\"has_buffers\":{},\"auto_grab\":{},\"grab_outdated\":{},\"grab_state\":{},\"source\":{},\"source_setting\":{},\"locked\":{},\"fps_l\":{},\"fps_r\":{},\
 \"step_index\":{},\"step_count\":{},\"step_label\":{},\"step_remaining_s\":{},\"elapsed_s\":{},\"total_s\":{},\
 \"session_dir\":{},\"protocol\":{},\"prox\":{},\"search\":{},\"last_session_aborted\":{},\"calib_state\":{},\
-\"recalib_suggested\":{},\"baseline\":{},\"warmup_remaining_s\":{},\"calib_saved\":{},\"widen_sensitivity\":{},\"dev\":{},\"setup_done\":{},\"last_calib_widen\":{},\"calib_failed_eye\":{},\"user_look_down_default\":[{},{}],\"user_look_down_previous\":[{},{}],\"user_squint_default\":[{},{}],\"user_squint_previous\":[{},{}],\"live\":{},\"live_ms\":{},\"preview\":{},\"pupil_l\":{},\"pupil_r\":{},\"cam_fps\":[{},{}],\"prox_min\":{},\"search_detail\":{},\"last_calib\":{},\"last_error\":{},\"last_error_en\":{},\"last_error_unix\":{},\"lid_veto\":{},\"driftlog\":{},\"started_unix\":{},\"headset_off_count\":{},\"stored\":{},\"pid\":{pid},\"updated_unix\":{}}}",
+\"recalib_suggested\":{},\"baseline\":{},\"warmup_remaining_s\":{},\"calib_saved\":{},\"widen_sensitivity\":{},\"dev\":{},\"setup_done\":{},\"last_calib_widen\":{},\"calib_failed_eye\":{},\"user_look_down_default\":[{},{}],\"user_look_down_previous\":[{},{}],\"user_squint_default\":[{},{}],\"user_squint_previous\":[{},{}],\"live\":{},\"live_ms\":{},\"preview\":{},\"pupil_l\":{},\"pupil_r\":{},\"cam_fps\":[{},{}],\"prox_min\":{},\"search_detail\":{},\"last_calib\":{},\"last_error\":{},\"last_error_en\":{},\"last_error_unix\":{},\"lid_veto\":{},\"driftlog\":{},\"started_unix\":{},\"headset_off_count\":{},\"stored\":{},\"search_box\":{},\"pid\":{pid},\"updated_unix\":{}}}",
             json_str(self.state),
             json_str(&self.message),
             json_str(&crate::message_en::message_en(&self.message)),
@@ -422,6 +426,7 @@ impl Status {
             num(self.started_unix),
             self.headset_off_count,
             self.stored.to_json(),
+            search_box_json(&self.search_box),
             num(updated_unix),
         )
     }
@@ -429,6 +434,12 @@ impl Status {
 
 fn num(v: f64) -> String {
     if v.is_finite() { format!("{:.3}", v) } else { "-1".into() }
+}
+
+/// Both eyes' fixed search boxes: `[null,[x0,y0,x1,y1]]`.
+fn search_box_json(boxes: &[Option<crate::feat::SearchBox>; 2]) -> String {
+    let one = |b: &Option<crate::feat::SearchBox>| b.map_or("null".into(), |b| format!("[{},{},{},{}]", b.x0, b.y0, b.x1, b.y1));
+    format!("[{},{}]", one(&boxes[0]), one(&boxes[1]))
 }
 
 fn num_or_null(v: f64) -> String {
@@ -475,6 +486,10 @@ pub enum Command {
     /// thread, which saves it and takes the buffers again by the new route when that changes it; refused while
     /// recording or calibrating.
     SetSource(crate::dspsrc::Source),
+    /// `set search_box left|right auto` / `set search_box left|right <x0> <y0> <x1> <y1>`: that eye's pupil search
+    /// window back to following the picture, or fixed at this box (upright frame px; `feat::SearchBox::new`'s rules),
+    /// answered by the control thread itself, in every state (saved in settings.json, used from the next frame).
+    SetSearchBox(usize, Option<crate::feat::SearchBox>),
     /// `preview on` / `preview off`: the panel's eye preview, answered by the control thread itself, in every state.
     Preview(bool),
     /// `driftlog on [<stem>]`: start the drift log (`driftlog`), answered by the control thread itself, in every state;
@@ -499,6 +514,28 @@ pub const LID_VETO_BAD_VALUE: &str = "lid_veto は on か off で";
 
 /// The reply to `set source` with anything but auto, dsp or grab.
 pub const SOURCE_BAD_VALUE: &str = "source は auto か dsp か grab で";
+
+/// The reply to `set search_box` without an eye, or with anything but auto or a box that fits the frame.
+pub const SEARCH_BOX_BAD_VALUE: &str = "search_box は left か right のあとに auto か x0 y0 x1 y1 (枠の中、各辺 60 以上) で";
+
+/// `set search_box`'s eye and value (after "set search_box").
+fn parse_search_box<'a>(words: &mut impl Iterator<Item = &'a str>) -> Result<Command, String> {
+    let eye = match words.next() {
+        Some("left") => 0,
+        Some("right") => 1,
+        _ => return Err(SEARCH_BOX_BAD_VALUE.into()),
+    };
+    let first = words.next().ok_or(SEARCH_BOX_BAD_VALUE)?;
+    if first == "auto" {
+        return Ok(Command::SetSearchBox(eye, None));
+    }
+    let mut n = [first.parse::<f64>().map_err(|_| SEARCH_BOX_BAD_VALUE)?, 0.0, 0.0, 0.0];
+    for v in n.iter_mut().skip(1) {
+        *v = words.next().and_then(|w| w.parse::<f64>().ok()).ok_or(SEARCH_BOX_BAD_VALUE)?;
+    }
+    let b = crate::feat::SearchBox::new(n[0], n[1], n[2], n[3]).ok_or(SEARCH_BOX_BAD_VALUE)?;
+    Ok(Command::SetSearchBox(eye, Some(b)))
+}
 
 /// Parse one control line. Protocol names are 1-32 of [A-Za-z0-9_-], so they can never name a path.
 pub fn parse_command(line: &str) -> Result<Command, String> {
@@ -543,6 +580,7 @@ pub fn parse_command(line: &str) -> Result<Command, String> {
         (Some("set"), Some("source")) => {
             Command::SetSource(words.next().and_then(crate::dspsrc::Source::parse).ok_or(SOURCE_BAD_VALUE)?)
         }
+        (Some("set"), Some("search_box")) => parse_search_box(&mut words)?,
         _ => return Err("知らないコマンド".into()),
     };
     if words.next().is_some() {
@@ -603,6 +641,25 @@ mod tests {
             assert_eq!(parse_command(bad), Err(LID_VETO_BAD_VALUE.into()), "{bad}");
         }
         assert_eq!(parse_command("set lid_veto on now"), Err("知らないコマンド".into()));
+        let b = crate::feat::SearchBox::new(150.0, 90.0, 330.0, 300.0);
+        assert_eq!(parse_command("set search_box left 150 90 330 300\n"), Ok(Command::SetSearchBox(0, b)));
+        assert_eq!(parse_command(" set search_box right 150.2 90 330 299.8"), Ok(Command::SetSearchBox(1, b)));
+        assert_eq!(parse_command("set search_box right auto"), Ok(Command::SetSearchBox(1, None)));
+        for bad in [
+            "set search_box",
+            "set search_box auto",
+            "set search_box both auto",
+            "set search_box left",
+            "set search_box left 150 90 330",
+            "set search_box left 150 90 330 x",
+            "set search_box left 150 90 180 300",
+            "set search_box left -1 90 330 300",
+            "set search_box left 150 90 330 401",
+        ] {
+            assert_eq!(parse_command(bad), Err(SEARCH_BOX_BAD_VALUE.into()), "{bad}");
+        }
+        assert_eq!(parse_command("set search_box left auto now"), Err("知らないコマンド".into()));
+        assert_eq!(parse_command("set search_box left 150 90 330 300 1"), Err("知らないコマンド".into()));
         assert_eq!(parse_command("delete rec\n"), Ok(Command::Delete(crate::stored::Kind::Rec)));
         assert_eq!(parse_command(" delete calib_images"), Ok(Command::Delete(crate::stored::Kind::CalibImages)));
         for bad in ["delete", "delete calib", "delete ../rec", "delete all", "delete rec_2026-10-12_09-59-05"] {

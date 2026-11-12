@@ -25,6 +25,36 @@ pub const X_MIN_LO: f64 = 100.0;
 /// eye preview draws the window too (preview.rs).
 pub const SEARCH_Y0: usize = 70;
 pub const SEARCH_Y1: usize = 320;
+/// The smallest side (px) of a search box the user sets: room for a pupil (semi-axis up to 60) and the blob search.
+pub const SEARCH_BOX_MIN: f64 = 60.0;
+
+/// A pupil search window the user fixed for one eye (settings.json `search_box`, set from the panel's eye preview),
+/// in upright frame px: left, top, right, bottom. With one the window no longer follows the picture (no temporal
+/// shading edge, lens edge or extended / dim-side search), and no pupil centred outside it is taken: something dark
+/// elsewhere in the picture can never be read as the pupil. The lids and the iris box are bounded by its left edge as
+/// they are by `x_min`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SearchBox {
+    pub x0: f64,
+    pub y0: f64,
+    pub x1: f64,
+    pub y1: f64,
+}
+
+impl SearchBox {
+    /// A box within the frame and at least SEARCH_BOX_MIN on each side (whole px), or None.
+    pub fn new(x0: f64, y0: f64, x1: f64, y1: f64) -> Option<SearchBox> {
+        let [x0, y0, x1, y1] = [x0, y0, x1, y1].map(f64::round);
+        let inside = |lo: f64, hi: f64, size: usize| 0.0 <= lo && lo < hi && hi <= size as f64;
+        (inside(x0, x1, W) && inside(y0, y1, H) && x1 - x0 >= SEARCH_BOX_MIN && y1 - y0 >= SEARCH_BOX_MIN)
+            .then_some(SearchBox { x0, y0, x1, y1 })
+    }
+
+    /// Whether a point is inside (the left and top edges included).
+    pub fn contains(&self, x: f64, y: f64) -> bool {
+        (self.x0..self.x1).contains(&x) && (self.y0..self.y1).contains(&y)
+    }
+}
 /// The prototype's opening is computed from this column on (exact from 8 columns further), the blurred image from
 /// OPF_X0. The leftmost samples ever taken are the iris rays on the temporal side, 95 px left of a pupil that is right
 /// of X_MIN. The live search starts them `OPEN_BEFORE` columns left of its own left edge instead (room for a pupil
@@ -154,6 +184,10 @@ pub struct Search {
     pub legacy: bool,
     /// The dim-side search, for a wear whose pupil sits in the dim part of the picture (`DimSearch`); None: none.
     pub dim: Option<DimSearch>,
+    /// The rows the blobs are looked for in (from, to): SEARCH_Y0..SEARCH_Y1, or a fixed box's.
+    pub rows: (usize, usize),
+    /// A box the user fixed (`SearchBox`): a pupil centred outside it is never taken.
+    pub fixed: Option<SearchBox>,
 }
 
 /// The last search when nothing else found a pupil, for a wear where the part of the picture around the temporal edge
@@ -180,7 +214,15 @@ pub struct DimSearch {
 }
 
 impl Search {
-    pub const LEGACY: Search = Search { x_min: X_MIN, find_x_min: X_MIN, ext: ExtCheck::ANY, legacy: true, dim: None };
+    pub const LEGACY: Search = Search {
+        x_min: X_MIN,
+        find_x_min: X_MIN,
+        ext: ExtCheck::ANY,
+        legacy: true,
+        dim: None,
+        rows: (SEARCH_Y0, SEARCH_Y1),
+        fixed: None,
+    };
 
     /// The live rules with this left edge.
     pub fn live(x_min: f64) -> Search {
@@ -191,7 +233,21 @@ impl Search {
     pub fn live_ext(x_min: f64, find_x_min: f64, ext: ExtCheck) -> Search {
         let x_min = x_min.clamp(X_MIN_LO, X_MIN);
         let find_x_min = if find_x_min.is_finite() { find_x_min.clamp(X_MIN_LO, x_min) } else { x_min };
-        Search { x_min, find_x_min, ext, legacy: false, dim: None }
+        Search { x_min, find_x_min, ext, legacy: false, dim: None, rows: (SEARCH_Y0, SEARCH_Y1), fixed: None }
+    }
+
+    /// The live rules inside a box the user fixed: its edges, no extended or dim-side search. (The right edge is the
+    /// `xmax` the caller passes, the box's.)
+    pub fn fixed(b: SearchBox) -> Search {
+        Search {
+            x_min: b.x0,
+            find_x_min: b.x0,
+            ext: ExtCheck::ANY,
+            legacy: false,
+            dim: None,
+            rows: (b.y0 as usize, b.y1 as usize),
+            fixed: Some(b),
+        }
     }
 }
 
@@ -235,6 +291,8 @@ pub struct Diag {
     pub dim: bool,
     /// ... or it found one its check refused.
     pub dim_refused: bool,
+    /// A pupil refined with its centre outside the user's fixed box (`Search::fixed`) and was not taken.
+    pub outside_box: bool,
 }
 
 impl Default for Diag {
@@ -255,6 +313,7 @@ impl Default for Diag {
             ext_refused: false,
             dim: false,
             dim_refused: false,
+            outside_box: false,
         }
     }
 }
@@ -563,6 +622,8 @@ pub enum XMinFrom {
     Shade,
     /// The end of the shading was further out than X_MIN_LO allows: X_MIN_LO.
     Floor,
+    /// The user fixed the window (`SearchBox`): its left edge.
+    User,
 }
 
 impl XMinFrom {
@@ -571,6 +632,7 @@ impl XMinFrom {
             XMinFrom::Fixed => "fixed",
             XMinFrom::Shade => "shade",
             XMinFrom::Floor => "floor",
+            XMinFrom::User => "user",
         }
     }
 }
@@ -802,7 +864,8 @@ impl Extractor {
     /// to MAX_CANDIDATES and keep blobs cut by the left edge (`refine_candidates` decides).
     fn find_pupil_blob(&mut self, xs: f64, xmax: f64, prev: Option<(f64, f64)>, diag: &mut Diag) {
         let legacy = self.search.legacy;
-        let (x0, y0, x1, y1) = (xs as usize, SEARCH_Y0, (pint(xmax).clamp(xs as isize + 1, W as isize)) as usize, SEARCH_Y1);
+        let (y0, y1) = self.search.rows;
+        let (x0, x1) = (xs as usize, (pint(xmax).clamp(xs as isize + 1, W as isize)) as usize);
         let (sw, sh) = (x1 - x0, y1 - y0);
         let opf = &self.opf;
         let at = |x: usize, y: usize| opf[(y0 + y) * W + x0 + x];
@@ -916,6 +979,11 @@ impl Extractor {
             }
             let before_lens = p.cx < xmax;
             if !before_lens {
+                continue;
+            }
+            // Inside a box the user fixed, or not at all (the refined centre can drift out of the blob's window)
+            if self.search.fixed.is_some_and(|b| !b.contains(p.cx, p.cy)) {
+                diag.outside_box = true;
                 continue;
             }
             match edge_zone {
@@ -1697,6 +1765,56 @@ mod tests {
         let p = p.expect("pupil");
         assert!((p.cx - 275.0).abs() < 1.5 && (p.cy - 195.0).abs() < 1.5, "{p:?}");
         assert!(!f.diag.left_edge && f.diag.candidates >= 2, "{:?}", f.diag);
+    }
+
+    /// A dark disc of radius `r` at (cx, cy), as dark as a pupil: something in the picture that is not the pupil.
+    fn decoy(img: &mut [u8], cx: f64, cy: f64, r: f64) {
+        for y in 0..H {
+            for x in 0..W {
+                if (x as f64 - cx).hypot(y as f64 - cy) < r {
+                    img[y * W + x] = 12;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_fixed_box_takes_no_pupil_outside_it() {
+        // The real pupil at (275, 195), a larger dark disc up on the skin at (230, 110): the automatic window takes the
+        // larger blob
+        let mut img = synthetic_eye(275.0, 195.0, 22.0);
+        decoy(&mut img, 230.0, 110.0, 28.0);
+        let mut ex = Extractor { search: Search::live(X_MIN), ..Extractor::default() };
+        let (_, p) = ex.extract(&img, 347.0, None, None, None);
+        let p = p.expect("a pupil");
+        assert!((p.cx - 230.0).abs() < 2.0 && (p.cy - 110.0).abs() < 2.0, "the decoy: {p:?}");
+        // A box around the real pupil: only it, also with the prior on the decoy
+        let b = SearchBox::new(240.0, 150.0, 340.0, 250.0).unwrap();
+        ex.search = Search::fixed(b);
+        for prev in [None, Some((230.0, 110.0))] {
+            let (f, p) = ex.extract(&img, b.x1, prev, None, None);
+            let p = p.expect("the pupil");
+            assert!((p.cx - 275.0).abs() < 1.5 && (p.cy - 195.0).abs() < 1.5, "{p:?} {:?}", f.diag);
+        }
+        // A box around neither: nothing (and the lids are still measured where the last pupil was)
+        let b = SearchBox::new(100.0, 250.0, 200.0, 330.0).unwrap();
+        ex.search = Search::fixed(b);
+        let (f, p) = ex.extract(&img, b.x1, None, None, None);
+        assert!(p.is_none() && !f.ok_pupil, "{p:?}");
+    }
+
+    #[test]
+    fn a_search_box_must_fit_the_frame_and_hold_a_pupil() {
+        assert_eq!(SearchBox::new(100.4, 70.0, 300.0, 320.6), Some(SearchBox { x0: 100.0, y0: 70.0, x1: 300.0, y1: 321.0 }));
+        assert!(SearchBox::new(0.0, 0.0, 400.0, 400.0).is_some());
+        assert!(SearchBox::new(-1.0, 0.0, 200.0, 200.0).is_none(), "outside the frame");
+        assert!(SearchBox::new(0.0, 0.0, 401.0, 200.0).is_none(), "outside the frame");
+        assert!(SearchBox::new(200.0, 100.0, 100.0, 300.0).is_none(), "left of its left edge");
+        assert!(SearchBox::new(100.0, 100.0, 159.0, 300.0).is_none(), "too narrow");
+        assert!(SearchBox::new(100.0, 100.0, 300.0, 159.0).is_none(), "too low");
+        assert!(SearchBox::new(f64::NAN, 100.0, 300.0, 300.0).is_none());
+        let b = SearchBox::new(100.0, 100.0, 200.0, 200.0).unwrap();
+        assert!(b.contains(100.0, 100.0) && b.contains(199.9, 150.0) && !b.contains(200.0, 150.0) && !b.contains(150.0, 99.0));
     }
 
     #[test]

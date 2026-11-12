@@ -857,6 +857,41 @@ void testSensitivity() {
         SAME(eyecam::signature(a), eyecam::signature(b));
     }
 
+    // The fixed search boxes: search_box from status.json, null where an eye's window follows the picture; missing
+    // (an older eyecam-rec: no "Set search area") or not two of them is none
+    {
+        const Status both = eyecam::parseStatus("{\"state\": \"idle\", \"search_box\": [null, [150, 90, 330, 300]]}", kNow);
+        CHECK(both.hasSearchBox && !both.searchBoxFixed[0] && both.searchBoxFixed[1]);
+        CHECK(std::isnan(both.searchBox[0][0]) && both.searchBox[1][0] == 150 && both.searchBox[1][3] == 300);
+        const Status none = eyecam::parseStatus("{\"state\": \"idle\", \"search_box\": [null, null]}", kNow);
+        CHECK(none.hasSearchBox && !none.searchBoxFixed[0] && !none.searchBoxFixed[1]);
+        for (const char* bad : {"{\"state\": \"idle\"}", "{\"state\": \"idle\", \"search_box\": null}",
+                                "{\"state\": \"idle\", \"search_box\": [null]}"}) {
+            const Status old = eyecam::parseStatus(bad, kNow);
+            CHECK(!old.hasSearchBox && !old.searchBoxFixed[0] && !old.searchBoxFixed[1]);
+        }
+        // An eye's entry that isn't four numbers counts as not set
+        const Status odd = eyecam::parseStatus("{\"state\": \"idle\", \"search_box\": [[1, 2, 3], [1, 2, 3, \"4\"]]}", kNow);
+        CHECK(odd.hasSearchBox && !odd.searchBoxFixed[0] && !odd.searchBoxFixed[1]);
+        // The commands: whole px, within the frame and at least 60 a side, else none
+        const double box[4] = {150.4, 89.6, 330, 300};
+        SAME(eyecam::searchBoxCommand(0, box), "set search_box left 150 90 330 300");
+        SAME(eyecam::searchBoxCommand(1, box), "set search_box right 150 90 330 300");
+        const double whole[4] = {0, 0, 400, 400};
+        SAME(eyecam::searchBoxCommand(0, whole), "set search_box left 0 0 400 400");
+        const double narrow[4] = {150, 90, 209, 300};
+        const double outside[4] = {-1, 90, 330, 300};
+        const double past[4] = {150, 90, 330, 401};
+        const double nan[4] = {NAN, 90, 330, 300};
+        for (const double* b : {narrow, outside, past, nan}) SAME(eyecam::searchBoxCommand(0, b), "");
+        SAME(eyecam::searchBoxCommand(2, box), "");
+        SAME(eyecam::searchBoxAutoCommand(0), "set search_box left auto");
+        SAME(eyecam::searchBoxAutoCommand(1), "set search_box right auto");
+        CHECK(eyecam::isSearchBoxCommand(eyecam::searchBoxAutoCommand(1)) && eyecam::isSearchBoxCommand("set search_box left 1 2 3 4"));
+        CHECK(!eyecam::isSensitivityCommand(eyecam::searchBoxAutoCommand(0)));
+        CHECK(eyecam::runOfCommand(eyecam::searchBoxAutoCommand(0)) == eyecam::Run::None);
+    }
+
     // The eyelid veto: lid_veto.on from status.json; missing (an older eyecam-rec: no switch) or not a bool is none
     {
         const char* full = "{\"state\": \"idle\", \"lid_veto\": {\"on\": true, \"runs_per_s\": 4.2, \"fired\": 12, "
@@ -877,6 +912,7 @@ void testSensitivity() {
         SAME(eyecam::lidVetoCommand(false), "set lid_veto off");
         CHECK(eyecam::runOfCommand(eyecam::lidVetoCommand(true)) == eyecam::Run::None);
         CHECK(!eyecam::isSensitivityCommand(eyecam::lidVetoCommand(false)));
+        CHECK(!eyecam::isSearchBoxCommand(eyecam::lidVetoCommand(false)));
         // The redraw follows it
         eyecam::View a;
         a.status = off;

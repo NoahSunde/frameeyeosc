@@ -12,7 +12,8 @@
 //!   52  u32  where the lid lines start (LIDS_AT)   56  u32  one eye's lid lines' size (LID_SIZE)   60..64 reserved
 //! Then each eye (the left eye at HEADER, the right at HEADER + EYE_SIZE; anatomical):
 //!   0   u64  the frame's capture time (CLOCK_MONOTONIC ns; 0: no picture yet)   8  u64  pictures written of this eye
-//!   16  u32  flags: bit 0 the pupil was found, bit 1 the eye reads closed
+//!   16  u32  flags: bit 0 the pupil was found, bit 1 the eye reads closed, bit 2 the search window below is the
+//!       user's fixed box (settings.json `search_box`; else it follows the picture)
 //!   20  f32  pupil centre x   24  f32  ...y   28  f32  pupil radius   (picture px; NaN without a pupil)
 //!   32  f32  pupil search window left   36  f32  ...top   40  f32  ...right   44  f32  ...bottom   (picture px)
 //!   48..64 reserved
@@ -59,11 +60,13 @@ const _: () = assert!(FILE_SIZE == 81920, "version 1's size");
 pub const RATE: f64 = 15.0;
 /// How long one `preview on` keeps it on.
 pub const HOLD: Duration = Duration::from_secs(3);
-/// The rows the pupil search looks in (feat's window), and halved for the picture.
+/// The rows the pupil search looks in (feat's window), and halved for the picture; a frame's own when it has them
+/// (`Out::rows`: a fixed box's).
 const WINDOW_Y: (f64, f64) = (crate::feat::SEARCH_Y0 as f64, crate::feat::SEARCH_Y1 as f64);
 const SEQ: usize = 24;
 const PUPIL_FOUND: u32 = 1;
 const CLOSED: u32 = 2;
+const BOX_FIXED: u32 = 4;
 /// tmpfs's f_type (statfs), where the pictures may go.
 const TMPFS_MAGIC: i64 = 0x0102_1994;
 
@@ -74,6 +77,8 @@ pub struct Marks {
     pub pupil: Option<(f32, f32, f32)>,
     /// The search window: left, top, right, bottom (picture px).
     pub window: [f32; 4],
+    /// ...and it is the user's fixed box.
+    pub box_fixed: bool,
     pub closed: bool,
     /// The upper lid's skin line and the lower lid's line, if this frame has one: first and last column, and the row
     /// at the first, halfway and at the last (picture px).
@@ -97,10 +102,12 @@ impl Marks {
         let f = &o.f;
         let seen = f.ok_pupil && f.pupil_cx.is_finite() && f.pupil_cy.is_finite() && f.pupil_a.is_finite();
         let upper = f.upper_skin_y.is_finite() && !f.upper_edge;
+        let rows = if o.rows[1] > o.rows[0] { (o.rows[0], o.rows[1]) } else { WINDOW_Y };
         Self {
             pupil: seen.then(|| ((f.pupil_cx / 2.0) as f32, (f.pupil_cy / 2.0) as f32, (f.pupil_a / 2.0) as f32)),
             // The left edge as far as the pupil was looked for: the extended search's when it reaches past x_min.
-            window: [o.search_x_min, WINDOW_Y.0, o.xmax, WINDOW_Y.1].map(|v| (v / 2.0) as f32),
+            window: [o.search_x_min, rows.0, o.xmax, rows.1].map(|v| (v / 2.0) as f32),
+            box_fixed: o.box_fixed,
             closed: o.closed,
             // The lines this frame's values were measured from: none where it has none (pushed against its band's
             // edge, or a lower line the engine replaced with the last one, live::LOWER_DROP_MAX)
@@ -210,7 +217,9 @@ impl PreviewWriter {
             let count = u64::from_le_bytes(b[at + 8..at + 16].try_into().unwrap()) + 1;
             put_u64(b, at, t_mono_ns);
             put_u64(b, at + 8, count);
-            let flags = if marks.pupil.is_some() { PUPIL_FOUND } else { 0 } | if marks.closed { CLOSED } else { 0 };
+            let flags = if marks.pupil.is_some() { PUPIL_FOUND } else { 0 }
+                | if marks.closed { CLOSED } else { 0 }
+                | if marks.box_fixed { BOX_FIXED } else { 0 };
             put_u32(b, at + 16, flags);
             let (cx, cy, r) = marks.pupil.unwrap_or((f32::NAN, f32::NAN, f32::NAN));
             for (i, v) in [cx, cy, r].into_iter().chain(marks.window).enumerate() {
@@ -440,6 +449,18 @@ mod tests {
         let mut ext = out(true, false);
         ext.search_x_min = 162.0;
         assert_eq!(Marks::of(&ext).window, [81.0, 35.0, 173.0, 160.0]);
+        // A fixed box: its own rows, and the flag
+        let mut fixed = out(true, false);
+        (fixed.x_min, fixed.search_x_min, fixed.xmax, fixed.rows, fixed.box_fixed) = (200.0, 200.0, 320.0, [140.0, 260.0], true);
+        let m = Marks::of(&fixed);
+        assert_eq!((m.window, m.box_fixed, Marks::of(&ext).box_fixed), ([100.0, 70.0, 160.0, 130.0], true, false));
+        let box_path = std::env::temp_dir().join(format!("eyecam-preview-box-test-{}", std::process::id()));
+        let mut wb = PreviewWriter::create(&box_path).unwrap();
+        wb.picture(0, &f, &m, 8_000);
+        let read = parse(&wb.read()).unwrap();
+        assert_eq!(read.flags[0], PUPIL_FOUND | BOX_FIXED);
+        assert_eq!(read.marks[0][3..], [100.0, 70.0, 160.0, 130.0]);
+        drop(wb);
         let mut half = vec![0u8; SIDE * SIDE];
         halve(&f, &mut half);
         assert_eq!(seen.pictures[0], half);

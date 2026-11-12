@@ -7,3 +7,4 @@
 *.csv
 # ...except the made-up one the replay tests read.
 !/tests/fixtures/synthetic.csv
+.cargo-home/

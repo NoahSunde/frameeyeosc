@@ -1343,7 +1343,8 @@ frame_updater::UpdaterConfig updaterConfig(bool beta) {
         data != nullptr && data[0] == '/' ? std::string(data) : std::string(home != nullptr ? home : "") + "/.local/share";
     c.script = dataHome + "/frameeyeosc/frame-update.sh";
     c.app = "frameeyeosc";
-    c.repo = "sasaken1102r/frameeyeosc";
+    // This fork's releases (get.sh installs them): the update button must not swap in upstream's builds
+    c.repo = "NoahSunde/frameeyeosc";
     c.currentVersion = FRAMEEYEOSC_VERSION;
     c.assetPattern = "frameeyeosc-{version}-steamframe-aarch64.tar.gz";
     // The update button is only in the panel, so whoever uses it has the panel installed
@@ -2941,6 +2942,9 @@ int runDumpPng(const Options& options) {
             takeSliders(panel, [&](const PanelHit& slid) {
                 applyHit(slid, model, panel, idleAutostart, updater.get(), nullptr, nullptr, nullptr, &eyecamControl);
             });
+            // The eye preview's search area (an "automatic"; a click draws no box): only said here
+            std::string searchBox;
+            if (panel.takeSearchBoxCommand(searchBox)) std::printf("eyecam: would send %s\n", searchBox.c_str());
             double sensitivity = 0.0;
             if (panel.takeSensitivity(sensitivity, nowSeconds())) {
                 const std::string command = eyecam::sensitivityCommand(sensitivity);
@@ -4440,6 +4444,7 @@ int runOverlay(const Options& options) {
     // bright and dark steps (the picture drawn, and the one the overlay has)
     eyecam::Control eyecamControl;
     eyecam::SensitivitySender sensitivitySender;  // the widening sensitivity slider's value on its way
+    std::string searchBoxPending;  // the eye preview's last search box (or "automatic"), until eyecam-rec can take it
     setup_tools::PasswordCheck passwordCheck;     // the eye cameras' setup: is there a SteamOS password
     double lastEyecamRead = -1e9;
     std::string drawnEyecam;
@@ -5210,6 +5215,11 @@ int runOverlay(const Options& options) {
                     panel.dropSensitivityHold();
                     dirty = true;
                 }
+                // A search box it refused: the eye preview says so
+                if (!r.ok && eyecam::isSearchBoxCommand(r.command)) {
+                    panel.setSearchBoxRefused(true);
+                    dirty = true;
+                }
             }
             // A setting's slider let go of: written like a press (and the widening slider's Valve eye, below)
             takeSliders(panel, [&](const PanelHit& slid) {
@@ -5230,6 +5240,21 @@ int runOverlay(const Options& options) {
                     }
                 } else if (panel.sensitivityDragging()) {
                     sensitivitySender.dragged(panel.sensitivityValue(), nowSeconds());
+                }
+                // A search box drawn on the eye preview (or an eye back to automatic): the newest goes out as soon as
+                // no other command is out (the preview's "preview on" goes every second)
+                std::string box;
+                if (panel.takeSearchBoxCommand(box)) searchBoxPending = box;
+                if (!searchBoxPending.empty() && !eyecamControl.busy()) {
+                    const std::string socket = model.eyecamDir + "/ctl.sock";
+                    std::fprintf(stderr, "[eyecam] sending \"%s\" to %s\n", searchBoxPending.c_str(), socket.c_str());
+                    if (!eyecamControl.send(socket, searchBoxPending, nowSeconds()) && !eyecamControl.busy()) {
+                        std::fprintf(stderr, "[eyecam] %s failed: %s\n", searchBoxPending.c_str(),
+                                     eyecamControl.reply().error.c_str());
+                        panel.setSearchBoxRefused(true);
+                    }
+                    searchBoxPending.clear();
+                    dirty = true;
                 }
                 std::string command;
                 if (sensitivitySender.next(eyecamControl.busy(), nowSeconds(), command)) {

@@ -331,12 +331,24 @@ pub struct Tune {
     /// The eyelid veto (`veto`): the CNN may cancel a low EyeLid it is sure is an open eye (settings.json `lid_veto`,
     /// off by default: trained on one wearer's recordings only).
     pub lid_veto: bool,
+    /// The pupil search window the user fixed for this eye (settings.json `search_box`; `feat::SearchBox`), None: the
+    /// window follows the picture as usual.
+    pub search_box: Option<feat::SearchBox>,
 }
 
 impl Default for Tune {
     fn default() -> Self {
         let (wide_start, wide_width) = wide_curve(DEFAULT_WIDEN_SENSITIVITY);
-        Self { wide_start, wide_width, track: true, gaze_drop: true, edge_hold: true, ext_search: true, lid_veto: false }
+        Self {
+            wide_start,
+            wide_width,
+            track: true,
+            gaze_drop: true,
+            edge_hold: true,
+            ext_search: true,
+            lid_veto: false,
+            search_box: None,
+        }
     }
 }
 
@@ -378,6 +390,10 @@ pub struct Out {
     pub x_min: f64,
     /// The extended pupil search's left edge for this frame (`x_min` when it is not extended; see EXT_MAX_PX).
     pub search_x_min: f64,
+    /// The rows the pupil was looked for in (top, bottom; 0, 0 in a default Out: feat::SEARCH_Y0..SEARCH_Y1).
+    pub rows: [f64; 2],
+    /// The window was the user's fixed box (`Tune::search_box`).
+    pub box_fixed: bool,
     /// px from the last pupil seen's small-x (temporal) edge to `x_min` (NaN before the first pupil).
     pub edge_gap: f64,
     /// No pupil, the last one at the window's (temporal) edge: not closed, the eyelid values held (see EDGE_LOST_PX).
@@ -401,9 +417,12 @@ pub fn levels(params: &Params) -> (f64, f64, f64) {
 pub struct WearState {
     /// The time (s) of this wear's first frame (NaN before one).
     pub t_first: f64,
-    /// The pupil search window: x from `x_min` to `xmax`, rows feat::SEARCH_Y0..SEARCH_Y1.
+    /// The pupil search window: x from `x_min` to `xmax`, rows `y_min`..`y_max` (feat::SEARCH_Y0..SEARCH_Y1, or the
+    /// user's fixed box's; then `x_min_from` is User).
     pub x_min: f64,
     pub xmax: f64,
+    pub y_min: f64,
+    pub y_max: f64,
     /// The extended pupil search's left edge after the last frame (EXT_MAX_PX).
     pub search_x_min: f64,
     pub x_min_from: feat::XMinFrom,
@@ -543,8 +562,17 @@ pub struct EyeEngine {
     cm_sum: Vec<f64>,
     cm_n: u32,
     cm_last: u64,
+    /// The search window's right and left edge in use: the ones measured from the picture (`auto_*`), or the user's
+    /// fixed box's (`box_in_use`).
     xmax: f64,
     x_min: f64,
+    /// The edges and their source as measured from the picture, kept while a fixed box is in use (it can be cleared
+    /// in the middle of a wear).
+    auto_xmax: f64,
+    auto_x_min: f64,
+    auto_from: feat::XMinFrom,
+    /// The user's fixed box in use for this eye (Tune::search_box as of the last frame).
+    box_in_use: Option<feat::SearchBox>,
     /// The grey levels' scale for this wear, from the same mean image (`feat::Levels::for_profile`).
     levels: feat::Levels,
     /// The levels of the dim side of the picture, when the pupil search needs them (`feat::Levels::dim_side`).
@@ -793,6 +821,10 @@ impl Default for EyeEngine {
             cm_last: 0,
             xmax: 346.0,
             x_min: feat::X_MIN,
+            auto_xmax: 346.0,
+            auto_x_min: feat::X_MIN,
+            auto_from: feat::XMinFrom::Fixed,
+            box_in_use: None,
             levels: feat::Levels::AS_BUILT,
             dim_levels: None,
             x_min_from: feat::XMinFrom::Fixed,
@@ -919,6 +951,8 @@ impl EyeEngine {
             t_first: self.t_first,
             x_min: self.x_min,
             xmax: self.xmax,
+            y_min: self.ex.search.rows.0 as f64,
+            y_max: self.ex.search.rows.1 as f64,
             search_x_min: self.find_x_min,
             x_min_from: self.x_min_from,
             x_min_at: self.x_min_at,
@@ -999,28 +1033,52 @@ impl EyeEngine {
             // closes, and the glare reads as full brightness. Past the iris (feat::GLARE_MIN_X) the picture ends at the
             // glare, and the levels (also the window's and the lens edge's) are measured without it.
             let lens = feat::occluder_x(&m);
-            self.xmax = feat::glare_end(&m).map_or(lens, |g| lens.min(g));
-            (self.x_min, self.x_min_from) = feat::search_x_min_from(&m);
+            self.auto_xmax = feat::glare_end(&m).map_or(lens, |g| lens.min(g));
+            (self.auto_x_min, self.auto_from) = feat::search_x_min_from(&m);
             self.levels = feat::Levels::for_profile(&m);
-            let dim_x0 = (self.x_min - EXT_MAX_PX).max(feat::X_MIN_LO);
-            self.dim_levels = self.levels.dim_side(&m, dim_x0, self.x_min + feat::DIM_SIDE_PX);
+            let dim_x0 = (self.auto_x_min - EXT_MAX_PX).max(feat::X_MIN_LO);
+            self.dim_levels = self.levels.dim_side(&m, dim_x0, self.auto_x_min + feat::DIM_SIDE_PX);
             self.x_min_at = t;
         }
-        // The extended search's edge: within EXT_MAX_PX past x_min (and not past X_MIN_LO), x_min itself when off.
-        let ext_lo = if params.tune.ext_search { (self.x_min - EXT_MAX_PX).max(feat::X_MIN_LO) } else { self.x_min };
+        // The window: the user's fixed box for this eye, else as measured. A box set, changed or cleared drops the
+        // search prior and the last pupil (they may lie outside the new window), as a calibration's start does.
+        let fixed = params.tune.search_box;
+        if fixed != self.box_in_use {
+            self.box_in_use = fixed;
+            (self.x_min, self.xmax) = match fixed {
+                Some(b) => (b.x0, b.x1),
+                None => (self.auto_x_min, self.auto_xmax),
+            };
+            self.reset_tracking();
+        }
+        (self.x_min, self.xmax, self.x_min_from) = match fixed {
+            Some(b) => (b.x0, b.x1, feat::XMinFrom::User),
+            None => (self.auto_x_min, self.auto_xmax, self.auto_from),
+        };
+        // The extended search's edge: within EXT_MAX_PX past x_min (and not past X_MIN_LO), x_min itself when off or
+        // with a fixed box (nothing outside it is looked at).
+        let ext_lo = if params.tune.ext_search && fixed.is_none() {
+            (self.x_min - EXT_MAX_PX).max(feat::X_MIN_LO)
+        } else {
+            self.x_min
+        };
         self.find_x_min = self.find_x_min.clamp(ext_lo.min(self.x_min), self.x_min);
         let search_x_min = self.find_x_min;
         let ext = self.ext_check(t, valve_open);
-        self.ex.search = feat::Search::live_ext(self.x_min, search_x_min, ext);
-        // The dim-side search reaches as far as the extended one may (x_min itself with that off).
-        self.ex.search.dim = self.dim_levels.map(|levels| feat::DimSearch {
-            x0: ext_lo,
-            levels,
-            check: feat::ExtCheck {
-                a: if self.a_open.len() >= 30 { (DIM_SIZE_MIN * self.a_open.value, ext.a.1) } else { ext.a },
-                ..ext
-            },
-        });
+        if let Some(b) = fixed {
+            self.ex.search = feat::Search::fixed(b);
+        } else {
+            self.ex.search = feat::Search::live_ext(self.x_min, search_x_min, ext);
+            // The dim-side search reaches as far as the extended one may (x_min itself with that off).
+            self.ex.search.dim = self.dim_levels.map(|levels| feat::DimSearch {
+                x0: ext_lo,
+                levels,
+                check: feat::ExtCheck {
+                    a: if self.a_open.len() >= 30 { (DIM_SIZE_MIN * self.a_open.value, ext.a.1) } else { ext.a },
+                    ..ext
+                },
+            });
+        }
         self.ex.levels = self.levels;
         // An iris radius over IRIS_PUPIL_MAX x the open pupil's semi-axis is no limbus: for the rest of the wear the iris
         // fit takes the first rise out of the iris, and the radius is learnt again from its fits. So is the open eye's iris
@@ -1338,6 +1396,8 @@ impl EyeEngine {
             xmax: self.xmax,
             x_min: self.x_min,
             search_x_min,
+            rows: [self.ex.search.rows.0 as f64, self.ex.search.rows.1 as f64],
+            box_fixed: fixed.is_some(),
             edge_gap,
             edge_held,
             b_n,
@@ -4444,7 +4504,7 @@ mod tests {
                 for _ in 0..n {
                     out.push(e.process_open(&lid_frame(at, true), f64::NAN, open, t, &p));
                     if e.frame_no == 1 {
-                        (e.cm_n, e.x_min, e.find_x_min) = (40, 186.0, 186.0);
+                        (e.cm_n, e.auto_x_min, e.x_min, e.find_x_min) = (40, 186.0, 186.0, 186.0);
                     }
                     t += 1.0 / FPS;
                 }
@@ -4488,6 +4548,37 @@ mod tests {
         let (_, near, past, _, _, _, _, _) = run(Tune { ext_search: false, ..Tune::default() });
         assert!(near.f.ok_pupil && near.search_x_min == 186.0);
         assert!(!past.f.ok_pupil && past.search_x_min == 186.0 && !past.f.diag.ext_tried, "{:?}", past.f.diag);
+    }
+
+    #[test]
+    fn a_fixed_search_box_keeps_the_pupil_search_inside_it() {
+        let b = feat::SearchBox::new(200.0, 140.0, 320.0, 260.0).unwrap();
+        let mut p = Params { tune: Tune { search_box: Some(b), ..Tune::default() }, ..Params::default() };
+        let mut e = EyeEngine::default();
+        let mut k = 0;
+        let mut feed = |e: &mut EyeEngine, p: &Params, at: (f64, f64), n: usize| {
+            let mut last = None;
+            for _ in 0..n {
+                last = Some(e.process(&lid_frame(Some(at), true), f64::NAN, k as f64 / FPS, p));
+                k += 1;
+            }
+            last.unwrap()
+        };
+        // Inside the box: found, the window is the box's
+        let o = feed(&mut e, &p, (250.0, 200.0), 90);
+        assert!(o.f.ok_pupil && o.box_fixed, "{:?}", o.f.diag);
+        assert_eq!((o.x_min, o.search_x_min, o.xmax, o.rows), (200.0, 200.0, 320.0, [140.0, 260.0]));
+        let state = e.wear_state();
+        assert_eq!((state.x_min_from, state.y_min, state.y_max), (feat::XMinFrom::User, 140.0, 260.0));
+        // Out past its left edge: not looked for there (no extended search), and the window stays
+        let o = feed(&mut e, &p, (150.0, 200.0), 10);
+        assert!(!o.f.ok_pupil && !o.f.diag.ext_tried && o.search_x_min == 200.0, "{:?}", o.f.diag);
+        // Cleared: the window follows the picture again, with the usual rows
+        p.tune.search_box = None;
+        let o = feed(&mut e, &p, (250.0, 200.0), 10);
+        assert!(o.f.ok_pupil && !o.box_fixed, "{:?}", o.f.diag);
+        assert_eq!((o.x_min, o.xmax, o.rows), (e.auto_x_min, e.auto_xmax, [70.0, 320.0]));
+        assert_ne!(e.wear_state().x_min_from, feat::XMinFrom::User);
     }
 
     #[test]

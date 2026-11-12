@@ -3102,6 +3102,80 @@ void testPreview(const FontSet& fonts) {
             CHECK(panel.previewMarks().pupil);
             panel.render(m);
         }
+
+        // An eyecam-rec that takes search areas: "Set search area" under the marks' switches, in the same space and
+        // apart from them; pressed, a box drawn on a picture goes out as that eye's command once let go of
+        {
+            PanelModel boxed = m;
+            boxed.eyecam.status.hasSearchBox = true;
+            panel.pointerLeave();
+            panel.render(boxed);
+            CHECK(hits(panel, PanelAction::PreviewBoxEdit).size() == 1 && hits(panel, PanelAction::PreviewMark).size() == 3);
+            CHECK(hits(panel, PanelAction::PreviewBoxDraw).empty() && !panel.searchBoxEditing());
+            {
+                std::vector<EyePanel::HitArea> column = hits(panel, PanelAction::PreviewMark);
+                column.push_back(hits(panel, PanelAction::PreviewBoxEdit)[0]);
+                const double half = (1154 - 438) / 2.0;
+                for (size_t i = 0; i < column.size(); ++i) {
+                    CHECK(column[i].x >= 438 + half / 2 + 88 && column[i].x + column[i].w <= 438 + half * 1.5 - 88);
+                    CHECK(column[i].y >= 96 && column[i].y + column[i].h <= 676 - 36 - 22);
+                    for (size_t j = i + 1; j < column.size(); ++j) CHECK(!overlaps(column[i], column[j]));
+                }
+            }
+            // Drawing: both pictures take a box; the marks' switches give way to the end switch and the two
+            // "automatic" buttons, each pressable only while that eye's area is set
+            CHECK(press(panel, PanelAction::PreviewBoxEdit).action == PanelAction::None);
+            CHECK(panel.searchBoxEditing() && panel.previewOpen());
+            boxed.eyecam.status.searchBoxFixed[1] = true;
+            panel.render(boxed);
+            const std::vector<EyePanel::HitArea> pictures = hits(panel, PanelAction::PreviewBoxDraw);
+            CHECK(pictures.size() == 2 && hits(panel, PanelAction::PreviewMark).empty());
+            CHECK(hits(panel, PanelAction::PreviewBoxEdit).size() == 1 && hits(panel, PanelAction::PreviewBoxAuto).size() == 1);
+            std::string command;
+            CHECK(!panel.takeSearchBoxCommand(command));
+            for (const EyePanel::HitArea& p : pictures) {
+                CHECK(p.w == 176 && p.h == 176);
+                if (p.hit.arg != 0) continue;
+                // Pressed 20 px in from the picture's top left, let go of 150 px in: the box in frame px (400 for
+                // the 176 drawn), mirrored with the picture when it is drawn flipped
+                CHECK(panel.pointerDown(p.x + 20, p.y + 20, 0.0).action == PanelAction::None);
+                CHECK(panel.pointerMove(p.x + 90, p.y + 90));
+                panel.render(boxed);
+                CHECK(panel.pointerMove(p.x + 150, p.y + 150));
+                panel.pointerUp();
+                CHECK(panel.takeSearchBoxCommand(command));
+                const bool flip = eye_preview::pictureFlipped(0, true);
+                CHECK(command == (flip ? "set search_box left 59 45 355 341" : "set search_box left 45 45 341 341"));
+                CHECK(!panel.takeSearchBoxCommand(command));
+                // Too small: nothing goes out (the footer says so)
+                panel.pointerDown(p.x + 20, p.y + 20, 0.0);
+                panel.pointerMove(p.x + 40, p.y + 120);
+                panel.pointerUp();
+                CHECK(!panel.takeSearchBoxCommand(command));
+                // Leaving the panel while drawing drops the box
+                panel.pointerDown(p.x + 20, p.y + 20, 0.0);
+                panel.pointerMove(p.x + 150, p.y + 150);
+                panel.pointerLeave();
+                panel.pointerUp();
+                CHECK(!panel.takeSearchBoxCommand(command));
+            }
+            panel.render(boxed);
+            CHECK(pressArg(panel, PanelAction::PreviewBoxAuto, 1).action == PanelAction::None);
+            CHECK(panel.takeSearchBoxCommand(command) && command == "set search_box right auto");
+            CHECK(panel.previewOpen() && panel.searchBoxEditing());
+            // Ended: the marks' switches again, the pictures take no box
+            panel.render(boxed);
+            press(panel, PanelAction::PreviewBoxEdit);
+            panel.render(boxed);
+            CHECK(!panel.searchBoxEditing() && hits(panel, PanelAction::PreviewBoxDraw).empty());
+            CHECK(hits(panel, PanelAction::PreviewMark).size() == 3);
+            // Drawing ends with the pictures, and with an eyecam-rec that doesn't take search areas
+            press(panel, PanelAction::PreviewBoxEdit);
+            CHECK(panel.searchBoxEditing());
+            panel.render(m);
+            CHECK(!panel.searchBoxEditing() && hits(panel, PanelAction::PreviewBoxEdit).empty());
+            panel.render(m);
+        }
         pressArg(panel, PanelAction::PreviewSource, static_cast<int>(eye_preview::Source::Raw));
         panel.render(m);
         press(panel, PanelAction::PreviewMirror);

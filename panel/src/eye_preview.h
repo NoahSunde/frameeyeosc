@@ -225,6 +225,7 @@ struct Picture {
     double pupilY = NAN;
     double pupilR = NAN;
     double window[4] = {NAN, NAN, NAN, NAN};  ///< the pupil search window: left, top, right, bottom (picture px)
+    bool windowFixed = false;   ///< ...it is the user's fixed box (else it follows the picture)
     bool closed = false;        ///< eyecam-rec reads the eye closed
     bool lids = false;          ///< the file has the lid lines (an older eyecam-rec's has none)
     LidLine upper;              ///< the upper lid's skin line...

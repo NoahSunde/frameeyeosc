@@ -264,6 +264,9 @@ pub struct Shared {
     pub veto_fired: AtomicU64,
     pub veto_us_mean: AtomicU32,
     pub veto_us_max: AtomicU32,
+    /// Each eye's fixed pupil search window (settings.json `search_box`; left, right), set from ctl.sock (`set
+    /// search_box`) or a hand edit of the file, and read by the worker on every frame.
+    pub search_box: Mutex<[Option<crate::feat::SearchBox>; 2]>,
 }
 
 impl Default for Shared {
@@ -297,6 +300,7 @@ impl Default for Shared {
             veto_fired: AtomicU64::new(0),
             veto_us_mean: AtomicU32::new(0),
             veto_us_max: AtomicU32::new(0),
+            search_box: Mutex::new([None, None]),
         }
     }
 }
@@ -765,8 +769,10 @@ impl Worker {
             }
         }
         let veto_on = self.shared.lid_veto.load(Ordering::Relaxed);
-        for p in &mut self.params {
+        let boxes = *self.shared.search_box.lock().unwrap();
+        for (p, b) in self.params.iter_mut().zip(boxes) {
             p.tune.lid_veto = veto_on;
+            p.tune.search_box = b;
         }
         let started = Instant::now();
         let mut o = self.engines[eye].process_open(img, pitch as f64, open as f64, t, &self.params[eye]);

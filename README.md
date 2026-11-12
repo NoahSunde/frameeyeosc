@@ -1,5 +1,13 @@
 # frameeyeosc
 
+> **This fork (NoahSunde/frameeyeosc)** adds a fixed pupil search area per eye camera: on the eye preview, "Set search area" lets you draw the box each eye's pupil is looked for in, so something dark elsewhere in the picture is never taken for the pupil. Install or update it in Konsole on the Frame with:
+>
+> ```sh
+> curl -fsSL https://raw.githubusercontent.com/NoahSunde/frameeyeosc/main/get.sh | sh
+> ```
+>
+> It installs frameeyeosc, the eye-camera tool and the panel from this fork's latest release, and the panel's update button follows this fork. Upstream's installer (option 1) puts the original back.
+
 Sends the Steam Frame's eye tracking (gaze and eye openness) to VRChat over OSC, as VRCFaceTracking-style avatar parameters. It runs on the headset as a background service and works with PC VRChat streamed through Steam Link. It can also send to VRCFaceTracking on the PC, so the eyes can be combined with other trackers.
 
 [日本語版はこちら](README.ja.md)

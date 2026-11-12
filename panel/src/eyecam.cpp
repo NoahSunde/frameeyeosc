@@ -176,6 +176,16 @@ Status parseStatus(const std::string& text, double mtime) {
     const JsonValue* vetoOn = veto != nullptr && veto->isObject() ? veto->get("on") : nullptr;
     status.hasLidVeto = vetoOn != nullptr && vetoOn->isBool();
     status.lidVeto = status.hasLidVeto && vetoOn->boolean;
+    // The fixed search boxes (missing on an older eyecam-rec: no "Set search area"): [null or [x0, y0, x1, y1]] x 2
+    const JsonValue* boxes = root.get("search_box");
+    status.hasSearchBox = boxes != nullptr && boxes->isArray() && boxes->items.size() == 2;
+    for (int eye = 0; eye < 2; ++eye) {
+        const JsonValue* b = status.hasSearchBox ? &boxes->items[eye] : nullptr;
+        bool fixed = b != nullptr && b->isArray() && b->items.size() == 4;
+        for (int i = 0; i < 4; ++i) fixed = fixed && b->items[i].isNumber();
+        status.searchBoxFixed[eye] = fixed;
+        for (int i = 0; i < 4; ++i) status.searchBox[eye][i] = fixed ? b->items[i].number : kNaN;
+    }
     // The setup (missing on an older eyecam-rec: see setupComplete and toolInstalled)
     const JsonValue* buffers = root.get("has_buffers");
     status.hasBuffers = buffers != nullptr && buffers->isBool() && buffers->boolean;
@@ -815,6 +825,30 @@ bool isSensitivityCommand(const std::string& command) {
 
 std::string lidVetoCommand(bool on) {
     return on ? "set lid_veto on" : "set lid_veto off";
+}
+
+std::string searchBoxCommand(int eye, const double box[4]) {
+    if (eye < 0 || eye > 1) return "";
+    long v[4];
+    for (int i = 0; i < 4; ++i) {
+        if (!std::isfinite(box[i])) return "";
+        v[i] = std::lround(box[i]);
+    }
+    const long side = static_cast<long>(kFrameSide);
+    const long least = static_cast<long>(kSearchBoxMin);
+    if (v[0] < 0 || v[1] < 0 || v[2] > side || v[3] > side || v[2] - v[0] < least || v[3] - v[1] < least) return "";
+    char text[96];
+    std::snprintf(text, sizeof(text), "set search_box %s %ld %ld %ld %ld", eye == 0 ? "left" : "right", v[0], v[1],
+                  v[2], v[3]);
+    return text;
+}
+
+std::string searchBoxAutoCommand(int eye) {
+    return eye == 0 ? "set search_box left auto" : "set search_box right auto";
+}
+
+bool isSearchBoxCommand(const std::string& command) {
+    return command.rfind("set search_box", 0) == 0;
 }
 
 bool sourceCardShown(const Status& status) {

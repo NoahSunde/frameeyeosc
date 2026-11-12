@@ -240,6 +240,18 @@ void testFile() {
     CHECK(read.eyes[0].present && read.eyes[0].timeNs == 5 && read.eyes[0].count == 2 && read.eyes[0].pupil);
     CHECK(near(read.eyes[0].pupilX, 120) && near(read.eyes[0].pupilY, 95) && near(read.eyes[0].pupilR, 10.5));
     CHECK(near(read.eyes[0].window[0], 93) && near(read.eyes[0].window[3], 160) && !read.eyes[1].present);
+    CHECK(!read.eyes[0].windowFixed);
+    // Flag bit 2: the window is the user's fixed box (and it round-trips)
+    fromRust[64 + 16] = 1 | 4;
+    CHECK(parsePictures(fromRust.data(), fromRust.size(), read, why));
+    CHECK(read.eyes[0].windowFixed && read.eyes[0].pupil && !read.eyes[0].closed);
+    {
+        Pictures fixed = madeUp(200);
+        fixed.eyes[1].windowFixed = true;
+        const std::vector<uint8_t> trip = encodePictures(fixed, 200);
+        CHECK(parsePictures(trip.data(), trip.size(), read, why));
+        CHECK(!read.eyes[0].windowFixed && read.eyes[1].windowFixed && read.eyes[1].closed);
+    }
     // Refused: another file, another version, sizes that don't add up, a picture too big, too short
     const auto refused = [&](std::vector<uint8_t> b, size_t at, uint8_t value) {
         b[at] = value;

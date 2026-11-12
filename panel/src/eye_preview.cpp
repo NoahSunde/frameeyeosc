@@ -23,6 +23,8 @@ constexpr int kMaxTries = 8;
 /** An eye's flags: the pupil was found, the eye reads closed. */
 constexpr uint32_t kPupilFound = 1;
 constexpr uint32_t kClosed = 2;
+/** The search window is the user's fixed box (an older eyecam-rec never sets it). */
+constexpr uint32_t kWindowFixed = 4;
 
 // The Frame is little-endian (aarch64), like every machine this is built for; the file is read with memcpy
 static_assert(sizeof(float) == 4, "the file has 4-byte floats");
@@ -318,6 +320,7 @@ bool parsePictures(const uint8_t* data, size_t size, Pictures& out, std::string&
         p.count = u64At(data, at + 8);
         const uint32_t flags = u32At(data, at + 16);
         p.closed = (flags & kClosed) != 0;
+        p.windowFixed = (flags & kWindowFixed) != 0;
         p.pupilX = f32At(data, at + 20);
         p.pupilY = f32At(data, at + 24);
         p.pupilR = f32At(data, at + 28);
@@ -362,7 +365,8 @@ std::vector<uint8_t> encodePictures(const Pictures& pictures, int side) {
         const size_t at = kHeaderSize + eye * eyeSize;
         put<uint64_t>(data, at, p.present ? p.timeNs : 0);
         put<uint64_t>(data, at + 8, p.count);
-        put<uint32_t>(data, at + 16, (p.pupil ? kPupilFound : 0) | (p.closed ? kClosed : 0));
+        put<uint32_t>(data, at + 16,
+                      (p.pupil ? kPupilFound : 0) | (p.closed ? kClosed : 0) | (p.windowFixed ? kWindowFixed : 0));
         const float marks[7] = {static_cast<float>(p.pupilX),    static_cast<float>(p.pupilY),
                                 static_cast<float>(p.pupilR),    static_cast<float>(p.window[0]),
                                 static_cast<float>(p.window[1]), static_cast<float>(p.window[2]),

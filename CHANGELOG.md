@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.2-box.1 (2026-11-12)
+
+You can now fix where the eye cameras look for each pupil. Something dark elsewhere in the picture can then no longer be taken for the pupil and pull the search area onto it. Draw the area on the eye preview; "automatic" puts it back.
+
+日本語: 目のカメラが瞳を探す範囲を、目ごとに決めて固定できるようにしました。映像のほかの場所にある暗いものを瞳と読んで、探す範囲がそちらへ引っぱられることがなくなります。目のプレビューで範囲を囲み、「自動に戻す」で元に戻せます。
+
+- New: a fixed pupil search area per eye (this fork, NoahSunde/frameeyeosc)
+  - Eye preview with the camera picture on: "Set search area", then press and drag on an eye's picture to box it in. A solid yellow frame is a set area, a dashed one follows the picture as before
+  - Inside a set area only: the edges no longer come from the picture, the search past the ear-side edge and the dark-side search don't run, and a pupil whose centre is outside the area is never taken
+  - Kept in eyecam's `~/.config/eyecam/settings.json` (`"search_box": [[x0, y0, x1, y1], null]`, left eye first, in camera pixels) and on ctl.sock as `set search_box left|right x0 y0 x1 y1` / `auto`
+- The panel's update button and `get.sh` take this fork's releases
+
 ## 0.10.2 (2026-11-08)
 
 With prescription inserts and a narrow IPD, eyecam could miss the pupil and read open eyes as closed; it now also looks in the darker part of the picture (#52). Squinting very hard could make user calibration fail; such an eye now keeps its previous or the standard squint (#54). Thanks @fujieda1237!

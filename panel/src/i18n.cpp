@@ -64,6 +64,12 @@ UiText makeJapanese() {
     t.previewMarkLids = "まぶた";
     t.previewMarkPupil = "瞳";
     t.previewMarkWindow = "探す範囲";
+    t.previewBoxEdit = "探す範囲を決める";
+    t.previewBoxAutoLeft = "左目: 自動に戻す";
+    t.previewBoxAutoRight = "右目: 自動に戻す";
+    t.previewNoteBoxEdit = "目の映像を押したままなぞって、その目の瞳を探す範囲を囲みます。枠の外のものは瞳と読みません。実線の枠が決めた範囲";
+    t.previewBoxTooSmall = "小さすぎます。もっと大きく囲んでください";
+    t.previewBoxRefused = "目のカメラが範囲を受け取りませんでした。もう一度囲んでください";
     t.previewFreeze = "止める";
     t.previewResume = "動かす";
     t.previewLidFormat = "まぶた %.2f";
@@ -1267,6 +1273,12 @@ UiText makeEnglish() {
     t.previewMarkLids = "Eyelids";
     t.previewMarkPupil = "Pupil";
     t.previewMarkWindow = "Search area";
+    t.previewBoxEdit = "Set search area";
+    t.previewBoxAutoLeft = "Left eye: automatic";
+    t.previewBoxAutoRight = "Right eye: automatic";
+    t.previewNoteBoxEdit = "Press and drag on an eye's picture to box in where its pupil is looked for. Nothing outside the box is taken as the pupil. A solid frame is a set area";
+    t.previewBoxTooSmall = "Too small. Draw a larger box";
+    t.previewBoxRefused = "The eye cameras didn't take the area. Draw it again";
     t.previewFreeze = "Freeze";
     t.previewResume = "Resume";
     t.previewLidFormat = "Lid %.2f";

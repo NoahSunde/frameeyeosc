@@ -1,7 +1,9 @@
-//! User settings, kept in ~/.config/eyecam/settings.json: `widen_sensitivity`, `lid_veto` and `source` are changed
-//! from the panel (`set ...` on ctl.sock; `lid_veto` and `source` by hand too), `dev` only by hand.
+//! User settings, kept in ~/.config/eyecam/settings.json: `widen_sensitivity`, `lid_veto`, `source` and `search_box`
+//! are changed from the panel (`set ...` on ctl.sock; `lid_veto`, `source` and `search_box` by hand too), `dev` only
+//! by hand.
 
 use crate::dspsrc::Source;
+use crate::feat::SearchBox;
 use crate::json::{self, Json};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -19,12 +21,41 @@ pub struct Settings {
     /// set (`set source`, or by hand). Read when eyecam-rec starts (--source overrides it); written to the file only
     /// when it isn't the default.
     pub source: Source,
+    /// Each eye's fixed pupil search window (left, right; anatomical), None: the window follows the picture (`set
+    /// search_box`, or by hand: `"search_box": [[x0, y0, x1, y1], null]` in upright frame px; followed while running).
+    /// Written to the file only when one is set.
+    pub search_box: [Option<SearchBox>; 2],
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { widen_sensitivity: crate::live::DEFAULT_WIDEN_SENSITIVITY, dev: false, lid_veto: false, source: Source::Auto }
+        Self {
+            widen_sensitivity: crate::live::DEFAULT_WIDEN_SENSITIVITY,
+            dev: false,
+            lid_veto: false,
+            source: Source::Auto,
+            search_box: [None, None],
+        }
     }
+}
+
+/// One eye's box in the file: null, or [x0, y0, x1, y1] (`SearchBox::new`'s rules); anything else is an error.
+fn parse_box(v: &Json) -> Result<Option<SearchBox>, ()> {
+    match v {
+        Json::Null => Ok(None),
+        _ => {
+            let n: Vec<f64> = v.arr().ok_or(())?.iter().map(|x| x.num().ok_or(())).collect::<Result<_, _>>()?;
+            match n[..] {
+                [x0, y0, x1, y1] => SearchBox::new(x0, y0, x1, y1).map(Some).ok_or(()),
+                _ => Err(()),
+            }
+        }
+    }
+}
+
+/// One eye's box as the file has it.
+fn box_text(b: Option<SearchBox>) -> String {
+    b.map_or("null".into(), |b| format!("[{}, {}, {}, {}]", b.x0, b.y0, b.x1, b.y1))
 }
 
 /// The default settings file, ~/.config/eyecam/settings.json.
@@ -55,6 +86,17 @@ impl Settings {
                         None => eprintln!("eyecam-rec: ignoring settings.json source (grab, dsp or auto)"),
                     }
                 }
+                if let Some(v) = j.get("search_box") {
+                    let both = v.arr().filter(|a| a.len() == 2).and_then(|a| Some([parse_box(&a[0]).ok()?, parse_box(&a[1]).ok()?]));
+                    match both {
+                        Some(boxes) => s.search_box = boxes,
+                        None => eprintln!(
+                            "eyecam-rec: ignoring settings.json search_box (two of null or [x0, y0, x1, y1], within the \
+                             frame, each side at least {})",
+                            crate::feat::SEARCH_BOX_MIN
+                        ),
+                    }
+                }
             }
             Err(e) => eprintln!("eyecam-rec: ignoring {}: {e}", path.display()),
         }
@@ -72,8 +114,13 @@ impl Settings {
             Source::Auto => String::new(),
             s => format!(",\n  \"source\": \"{}\"", s.label()),
         };
+        // `search_box` likewise only when one is set
+        let search_box = match self.search_box {
+            [None, None] => String::new(),
+            [l, r] => format!(",\n  \"search_box\": [{}, {}]", box_text(l), box_text(r)),
+        };
         let text = format!(
-            "{{\n  \"version\": 1,\n  \"widen_sensitivity\": {},\n  \"dev\": {},\n  \"lid_veto\": {}{source}\n}}\n",
+            "{{\n  \"version\": 1,\n  \"widen_sensitivity\": {},\n  \"dev\": {},\n  \"lid_veto\": {}{source}{search_box}\n}}\n",
             json::num(self.widen_sensitivity),
             self.dev,
             self.lid_veto
@@ -222,6 +269,42 @@ mod tests {
     }
 
     #[test]
+    fn reads_the_search_boxes_and_writes_them_only_when_set() {
+        let dir = std::env::temp_dir().join(format!("eyecam-settings-box-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("settings.json");
+        let b = SearchBox::new(150.0, 90.0, 330.0, 300.0);
+        for (text, boxes) in [
+            ("{}", [None, None]),
+            ("{\"search_box\": [[150, 90, 330, 300], null]}", [b, None]),
+            ("{\"search_box\": [null, [150, 90, 330, 300]]}", [None, b]),
+            ("{\"search_box\": [null, null]}", [None, None]),
+            // Not two boxes, a box outside the frame or too small, not numbers: none at all
+            ("{\"search_box\": [[150, 90, 330, 300]]}", [None, None]),
+            ("{\"search_box\": [[150, 90, 330, 300], [0, 0, 401, 300]]}", [None, None]),
+            ("{\"search_box\": [[150, 90, 180, 300], null]}", [None, None]),
+            ("{\"search_box\": [[150, 90, 330], null]}", [None, None]),
+            ("{\"search_box\": [[\"150\", 90, 330, 300], null]}", [None, None]),
+            ("{\"search_box\": 1}", [None, None]),
+        ] {
+            std::fs::write(&p, text).unwrap();
+            assert_eq!(Settings::load(&p).search_box, boxes, "{text}");
+        }
+        // Not written while none is set; written and kept by another `set ...` once one is
+        Settings::default().save(&p).unwrap();
+        assert!(!std::fs::read_to_string(&p).unwrap().contains("search_box"));
+        Settings::update(&p, |s| s.search_box[1] = b).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.contains("\"search_box\": [null, [150, 90, 330, 300]]"), "{text}");
+        Settings::update(&p, |s| s.lid_veto = true).unwrap();
+        assert_eq!(Settings::load(&p), Settings { lid_veto: true, search_box: [None, b], ..Settings::default() });
+        // Both cleared: the key goes
+        Settings::update(&p, |s| s.search_box = [None, None]).unwrap();
+        assert!(!std::fs::read_to_string(&p).unwrap().contains("search_box"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn set_source_keeps_the_rest_and_auto_leaves_the_file_as_before() {
         let dir = std::env::temp_dir().join(format!("eyecam-settings-set-source-{}", std::process::id()));
         let p = dir.join("settings.json");
@@ -230,7 +313,7 @@ mod tests {
         // `set source dsp` / `grab`: written, the other settings kept
         for source in [Source::Dsp, Source::Grab] {
             Settings::update(&p, |s| s.source = source).unwrap();
-            assert_eq!(Settings::load(&p), Settings { widen_sensitivity: 0.3, dev: true, lid_veto: true, source });
+            assert_eq!(Settings::load(&p), Settings { widen_sensitivity: 0.3, dev: true, lid_veto: true, source, ..Settings::default() });
             assert!(std::fs::read_to_string(&p).unwrap().contains(&format!("\"source\": \"{}\"", source.label())));
         }
         // `set source auto`: the key goes, and the file is the same as before it was set

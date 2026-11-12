@@ -10,6 +10,7 @@
 
 #include "i18n.h"
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -281,6 +282,10 @@ struct Status {
     double widenSensitivity = 0.0;     ///< 0 dull (rarely widens by itself) .. 1 sensitive (NaN when missing)
     bool hasLidVeto = false;           ///< "lid_veto" with its "on" is there (the Eyelids tab's switch shows only then)
     bool lidVeto = false;              ///< ...the eyelid veto is on ("set lid_veto on")
+    bool hasSearchBox = false;         ///< "search_box" is there (the eye preview's "Set search area" shows only then)
+    bool searchBoxFixed[2] = {false, false};  ///< ...each eye's (left, right) pupil search window is fixed by the user
+    double searchBox[2][4] = {{NAN, NAN, NAN, NAN}, {NAN, NAN, NAN, NAN}};  ///< ...at this box: left, top, right,
+                                                                            ///< bottom in frame px (NaN when not)
     bool hasBuffers = false;       ///< "has_buffers": eyecam-rec holds the camera buffers (false when missing)
     bool hasSetupDone = false;     ///< "setup_done" is there (a newer eyecam-rec)
     bool setupDone = false;        ///< the setup's calibration was done once
@@ -965,6 +970,32 @@ bool passwordWanted(const View& view, bool eyecamTab);
  * @return "set lid_veto on" or "set lid_veto off"
  */
 std::string lidVetoCommand(bool on);
+
+/** The frame size eyecam-rec's search boxes are given in (px, both sides), and the smallest side it takes. */
+constexpr double kFrameSide = 400.0;
+constexpr double kSearchBoxMin = 60.0;
+
+/**
+ * The command that fixes one eye's pupil search window (eyecam-rec takes it in every state, uses it from the next
+ * frame and keeps it in its settings.json; status.json's search_box then has it): no pupil outside it is taken.
+ * @param eye 0 left, 1 right (anatomical)
+ * @param box left, top, right, bottom in frame px (upright, the temporal side at small x; rounded to whole px)
+ * @return "set search_box left 150 90 330 300", or "" for a box outside the frame or under kSearchBoxMin a side
+ */
+std::string searchBoxCommand(int eye, const double box[4]);
+
+/**
+ * The command that lets one eye's pupil search window follow the picture again.
+ * @param eye 0 left, 1 right (anatomical)
+ * @return "set search_box left auto" or "set search_box right auto"
+ */
+std::string searchBoxAutoCommand(int eye);
+
+/**
+ * @param command a command sent to eyecam-rec
+ * @return true for "set search_box ..."
+ */
+bool isSearchBoxCommand(const std::string& command);
 
 /**
  * The light warning before a start: the start button (idle) and the retry button (error) open it instead of

@@ -137,6 +137,11 @@ enum class PanelAction {
     PreviewCamera,     ///< the eye cameras' pictures on / off (handled inside; the caller follows previewPictures)
     PreviewMark,       ///< one of the marks over the pictures on / off: arg = eye_preview::Mark (handled inside)
     PreviewFreeze,     ///< stop the drawing where it is, or let it move again (handled inside)
+    PreviewBoxEdit,    ///< "Set search area": start or end drawing the eyes' fixed search boxes (handled inside)
+    PreviewBoxDraw,    ///< a camera picture while drawing: pressed and dragged inside the panel, arg = the eye (0 left,
+                       ///< 1 right); the caller sends the box with takeSearchBoxCommand once let go of
+    PreviewBoxAuto,    ///< "... automatic": that eye's search window follows the picture again, arg = the eye (handled
+                       ///< inside; the caller sends it with takeSearchBoxCommand)
     ContribOpen,       ///< Debug tools' "Record for squint training": open its sheet, arg = contrib::Page (the panel
                        ///< opens it; the caller forgets the last recording's end and failure)
     ContribClose,      ///< its cross, "Cancel" or "Close" (handled inside)
@@ -571,6 +576,23 @@ public:
     const eye_preview::Marks& previewMarks() const { return previewMarks_; }
 
     /**
+     * A search box was drawn on a picture (let go of), or an eye's "automatic" pressed, since the last call: the command
+     * for eyecam-rec (eyecam::searchBoxCommand / searchBoxAutoCommand). Once per press.
+     * @param command where to write it
+     * @return true if there is one
+     */
+    bool takeSearchBoxCommand(std::string& command);
+
+    /** @return true while the eye preview is drawing search boxes ("Set search area" on) */
+    bool searchBoxEditing() const { return previewOpen_ && previewBoxEdit_; }
+
+    /**
+     * eyecam-rec refused a search box command: the sheet says so (until the next box is drawn).
+     * @param refused refused
+     */
+    void setSearchBoxRefused(bool refused) { boxRefused_ = refused; }
+
+    /**
      * The widening sensitivity slider was let go of (once per release). It keeps showing that value until
      * status.json has it, its command fails (dropSensitivityHold), or kSensitivityHoldSec pass.
      * @param value where to write the value (0..1, two decimals)
@@ -902,6 +924,31 @@ private:
     bool previewCameraKept_ = false;    ///< ...the pictures' switch as last pressed, for the next time it opens (this
                                         ///< run of the panel only; the cameras going away turns it off too)
     eye_preview::Marks previewMarks_;   ///< ...which marks are drawn over them
+    bool previewBoxEdit_ = false;       ///< ..."Set search area" is on: pressing a picture draws that eye's box
+    bool boxDragging_ = false;          ///< ...a box is being drawn (held)...
+    int boxEye_ = 0;                    ///< ...on this eye's picture (0 left, 1 right)...
+    double boxFrom_[2] = {0, 0};        ///< ...from this corner (picture px)...
+    double boxTo_[2] = {0, 0};          ///< ...to this one (follows the pointer, kept inside the picture)
+    std::string boxCommand_;            ///< the command for the box let go of, or an "automatic", until taken
+    bool boxSmall_ = false;             ///< the last box drawn was too small to use (the sheet says so)
+    bool boxRefused_ = false;           ///< eyecam-rec refused the last box
+    /** Where each eye's picture was last drawn (pointer px to picture px). */
+    struct PictureRect {
+        bool shown = false;  ///< drawn (fresh) with its size
+        double x = 0, y = 0, side = 0;
+        bool flip = false;
+        int n = 0;           ///< the picture's own side (px)
+    };
+    PictureRect pictureRects_[2];
+
+    /**
+     * A pointer position on an eye's picture as drawn, in the picture's own px (kept inside it).
+     * @param eye 0 left, 1 right
+     * @param x px from the left
+     * @param y px from the top
+     * @param out where to write x, y
+     */
+    void toPicture(int eye, double x, double y, double out[2]) const;
     bool contribOpen_ = false;         ///< "Record for squint training" is shown on the Advanced tab
     contrib::Page contribPage_ = contrib::Page::Record;  ///< ...opened as "Record" or "Recordings"
     bool contribAgreed_ = false;        ///< ..."Agree and continue" pressed (the question about glasses)
@@ -997,9 +1044,11 @@ private:
      * @param flip mirrored left to right
      * @param smooth the lid lines and EyeLid smoothed over the pictures (else as read: Raw)
      * @param marks which marks to draw ("Read as closed" always is)
+     * @param eye which eye (0 left, 1 right): while drawing search boxes, pressing the picture draws its box
      */
     void drawPreviewPicture(const Pen& pen, const UiText& t, const eye_preview::Picture& picture, bool fresh,
-                            double x, double y, double side, bool flip, bool smooth, const eye_preview::Marks& marks);
+                            double x, double y, double side, bool flip, bool smooth, const eye_preview::Marks& marks,
+                            int eye);
 
     /**
      * A switch as a pill: a check, bold and the accent while on.

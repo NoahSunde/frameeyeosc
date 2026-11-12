@@ -942,7 +942,9 @@ std::vector<std::string> sentenceLines(const Pen& pen, const std::string& text, 
 bool previewSheetAction(PanelAction action) {
     return action == PanelAction::PreviewClose || action == PanelAction::PreviewSource ||
            action == PanelAction::PreviewMirror || action == PanelAction::PreviewCamera ||
-           action == PanelAction::PreviewMark || action == PanelAction::PreviewFreeze;
+           action == PanelAction::PreviewMark || action == PanelAction::PreviewFreeze ||
+           action == PanelAction::PreviewBoxEdit || action == PanelAction::PreviewBoxDraw ||
+           action == PanelAction::PreviewBoxAuto;
 }
 
 /**
@@ -1038,7 +1040,31 @@ void EyePanel::previewSensitivityDrag(double value) {
     sensValue_ = std::clamp(value, 0.0, 1.0);
 }
 
+void EyePanel::toPicture(int eye, double x, double y, double out[2]) const {
+    const PictureRect& r = pictureRects_[eye];
+    const double scale = r.n > 0 && r.side > 0 ? r.side / r.n : 1.0;
+    const double px = r.flip ? (r.x + r.side - x) / scale : (x - r.x) / scale;
+    out[0] = std::clamp(px, 0.0, static_cast<double>(r.n));
+    out[1] = std::clamp((y - r.y) / scale, 0.0, static_cast<double>(r.n));
+}
+
+bool EyePanel::takeSearchBoxCommand(std::string& command) {
+    if (boxCommand_.empty()) return false;
+    command = boxCommand_;
+    boxCommand_.clear();
+    return true;
+}
+
 bool EyePanel::pointerMove(double x, double y) {
+    // A box being drawn on a picture follows the pointer (kept inside the picture) until let go of
+    if (boxDragging_) {
+        double at[2];
+        toPicture(boxEye_, x, y, at);
+        if (at[0] == boxTo_[0] && at[1] == boxTo_[1]) return false;
+        boxTo_[0] = at[0];
+        boxTo_[1] = at[1];
+        return true;
+    }
     // A held slider follows the pointer anywhere (it is let go of by the release, or by leaving the panel)
     if (sensDragging_) {
         const double value = sensitivityAt(x);
@@ -1109,6 +1135,29 @@ PanelHit EyePanel::pointerDown(double x, double y, double now) {
             // Stopped at what the next draw shows (the model isn't at hand here)
             previewFrozen_ = !previewFrozen_;
             previewFreezePending_ = previewFrozen_;
+            return {};
+        case PanelAction::PreviewBoxEdit:
+            previewBoxEdit_ = !previewBoxEdit_;
+            boxDragging_ = false;
+            boxSmall_ = false;
+            boxRefused_ = false;
+            return {};
+        case PanelAction::PreviewBoxDraw:
+            // Held: one corner here, the other follows the pointer until let go of (the caller sends it)
+            if (!previewBoxEdit_ || hit.arg < 0 || hit.arg > 1 || pictureRects_[hit.arg].n <= 0) return {};
+            boxDragging_ = true;
+            boxEye_ = hit.arg;
+            toPicture(boxEye_, x, y, boxFrom_);
+            boxTo_[0] = boxFrom_[0];
+            boxTo_[1] = boxFrom_[1];
+            boxSmall_ = false;
+            boxRefused_ = false;
+            return {};
+        case PanelAction::PreviewBoxAuto:
+            if (hit.arg < 0 || hit.arg > 1) return {};
+            boxCommand_ = eyecam::searchBoxAutoCommand(hit.arg);
+            boxSmall_ = false;
+            boxRefused_ = false;
             return {};
         case PanelAction::Tab:
             setTab(static_cast<PanelTab>(hit.arg));
@@ -1455,6 +1504,19 @@ PanelHit EyePanel::pointerDown(double x, double y, double now) {
 }
 
 bool EyePanel::pointerUp() {
+    if (boxDragging_) {
+        // Let go of: the box in the frame's px (the picture is the frame halved), or too small to use
+        boxDragging_ = false;
+        const PictureRect& r = pictureRects_[boxEye_];
+        const double k = r.n > 0 ? eyecam::kFrameSide / r.n : 0.0;
+        const double box[4] = {std::min(boxFrom_[0], boxTo_[0]) * k, std::min(boxFrom_[1], boxTo_[1]) * k,
+                               std::max(boxFrom_[0], boxTo_[0]) * k, std::max(boxFrom_[1], boxTo_[1]) * k};
+        const std::string command = eyecam::searchBoxCommand(boxEye_, box);
+        boxSmall_ = command.empty();
+        if (!command.empty()) boxCommand_ = command;
+        pressed_ = {};
+        return true;
+    }
     if (sensDragging_) {
         sensDragging_ = false;
         sensReleased_ = true;
@@ -1469,6 +1531,8 @@ bool EyePanel::pointerUp() {
 }
 
 bool EyePanel::pointerLeave() {
+    // Leaving the panel drops a box being drawn (nothing is sent)
+    boxDragging_ = false;
     // Leaving the panel lets go of the slider where it is
     if (sensDragging_) {
         sensDragging_ = false;
@@ -1639,6 +1703,11 @@ void EyePanel::openPreview() {
     // come back each time it opens until the panel restarts or they are turned off (also by the cameras going away)
     previewCamera_ = previewCameraKept_;
     previewFreezePending_ = false;
+    // (not drawing search areas: that is started from the sheet each time)
+    previewBoxEdit_ = false;
+    boxDragging_ = false;
+    boxSmall_ = false;
+    boxRefused_ = false;
     // (over whatever shows; the light warning before a recording doesn't stay behind it)
     eyecamConfirm_.close();
 }
@@ -8809,11 +8878,13 @@ void EyePanel::drawPreviewEye(const Pen& pen, const eye_preview::EyeShown& eye, 
 
 void EyePanel::drawPreviewPicture(const Pen& pen, const UiText& t, const eye_preview::Picture& picture, bool fresh,
                                   double x, double y, double side, bool flip, bool smooth,
-                                  const eye_preview::Marks& marks) {
+                                  const eye_preview::Marks& marks, int eye) {
     cairo_t* cr = pen.cr;
     const double r = 12;
     fillRounded(pen, x, y, side, side, r, kBg);
     const int n = picture.side;
+    // Where it is, for drawing a search box on it (kept while it is away, so a box being drawn stays where it was)
+    if (fresh && n > 0) pictureRects_[eye] = {true, x, y, side, flip, n};
     if (!fresh || n <= 0 || picture.pixels.size() != static_cast<size_t>(n) * n) {
         const std::vector<std::string> lines = wrapText(pen, t.previewWaitingPicture, 14, false, side - 20, 2);
         for (size_t i = 0; i < lines.size(); ++i) {
@@ -8848,14 +8919,16 @@ void EyePanel::drawPreviewPicture(const Pen& pen, const UiText& t, const eye_pre
     const auto px = [&](double v) { return flip ? x + side - v * scale : x + v * scale; };
     const auto py = [&](double v) { return y + v * scale; };
     const double* win = picture.window;
-    if (marks.window && std::isfinite(win[0]) && std::isfinite(win[1]) && std::isfinite(win[2]) &&
-        std::isfinite(win[3])) {
+    // (always while search areas are drawn: it is what they set)
+    if ((marks.window || previewBoxEdit_) && std::isfinite(win[0]) && std::isfinite(win[1]) &&
+        std::isfinite(win[2]) && std::isfinite(win[3])) {
         const double left = std::min(px(win[0]), px(win[2]));
         const double right = std::max(px(win[0]), px(win[2]));
+        // Dashed while it follows the picture, solid where the user fixed it
         const double dash[2] = {6, 4};
-        cairo_set_dash(cr, dash, 2, 0);
+        if (!picture.windowFixed) cairo_set_dash(cr, dash, 2, 0);
         pen.color(kPreviewWindow);
-        cairo_set_line_width(cr, 2);
+        cairo_set_line_width(cr, picture.windowFixed ? 2.5 : 2);
         cairo_rectangle(cr, left, py(win[1]), right - left, py(win[3]) - py(win[1]));
         cairo_stroke(cr);
         cairo_set_dash(cr, nullptr, 0, 0);
@@ -8897,6 +8970,20 @@ void EyePanel::drawPreviewPicture(const Pen& pen, const UiText& t, const eye_pre
         pen.text(x + 17, centerBaseline(by, 24, size), text, size, kText, true);
     };
     if (picture.closed) badge(y + 8, t.previewClosed);
+    // The box being drawn on this picture
+    if (boxDragging_ && boxEye_ == eye) {
+        const double left = std::min(px(boxFrom_[0]), px(boxTo_[0]));
+        const double right = std::max(px(boxFrom_[0]), px(boxTo_[0]));
+        const double top = py(std::min(boxFrom_[1], boxTo_[1]));
+        const double bottom = py(std::max(boxFrom_[1], boxTo_[1]));
+        pen.color(kAccent, 0.18);
+        cairo_rectangle(cr, left, top, right - left, bottom - top);
+        cairo_fill(cr);
+        pen.color(kAccent);
+        cairo_set_line_width(cr, 2.5);
+        cairo_rectangle(cr, left, top, right - left, bottom - top);
+        cairo_stroke(cr);
+    }
     // The EyeLid eyecam-rec sent for this very frame, under its dots (and off with them)
     if (marks.lids && picture.lids && std::isfinite(lids.eyeLid)) {
         char lid[64];
@@ -8904,7 +8991,9 @@ void EyePanel::drawPreviewPicture(const Pen& pen, const UiText& t, const eye_pre
         badge(y + side - 32, lid);
     }
     cairo_restore(cr);
-    strokeRounded(pen, x, y, side, side, r, kBorder, 1.5);
+    strokeRounded(pen, x, y, side, side, r, previewBoxEdit_ ? kAccent : kBorder, previewBoxEdit_ ? 2 : 1.5);
+    // While search areas are drawn, pressing the picture starts this eye's box
+    if (previewBoxEdit_) addButton({PanelAction::PreviewBoxDraw, nullptr, eye}, x, y, side, side);
 }
 
 void EyePanel::drawPreview(const Pen& pen, const UiText& t, const PanelModel& m) {
@@ -8928,6 +9017,13 @@ void EyePanel::drawPreview(const Pen& pen, const UiText& t, const PanelModel& m)
     // The eye cameras can't give pictures: their switch goes off, to be pressed again once they can (as the loop does)
     if (camera != CameraState::Available) stopPreviewPictures();
     const bool pictures = previewCamera_;
+    // Search areas are drawn only on the pictures, and only with an eyecam-rec that takes them
+    const bool boxes = m.eyecam.status.hasSearchBox;
+    if (!pictures || !boxes) {
+        previewBoxEdit_ = false;
+        boxDragging_ = false;
+    }
+    for (PictureRect& rect : pictureRects_) rect.shown = false;
     // A sheet over the content card (the tabs and the left column stay), like the other Frame apps' list
     drawCard(pen, kRightX, kContentY, kRight - kRightX, kContentH, 20, kCard, kBorder, 2);
     const double closeS = 48;
@@ -9068,12 +9164,35 @@ void EyePanel::drawPreview(const Pen& pen, const UiText& t, const PanelModel& m)
             const eye_preview::Picture& picture = pv.pictures.eyes[eye];
             const bool fresh = pv.hasPictures && eye_preview::pictureFresh(picture, pv.nowNs);
             drawPreviewPicture(pen, t, picture, fresh, cx - pictureSide / 2, chipsY + chipsH + 10, pictureSide,
-                               eye_preview::pictureFlipped(eye, previewMirror_), source != Source::Raw, previewMarks_);
+                               eye_preview::pictureFlipped(eye, previewMirror_), source != Source::Raw, previewMarks_,
+                               eye);
         }
     }
     // The marks' switches, one under the other in the space between the two pictures (they go for both; nothing
     // else is there, so the eyes keep their size)
-    if (pictures) {
+    if (pictures && previewBoxEdit_) {
+        // Drawing search areas: the switch that ends it, and each eye's way back to automatic (pressable while that
+        // eye's area is set)
+        const eyecam::Status& es = m.eyecam.status;
+        const double spaceW = half - pictureSide - 2 * gap;
+        double itemW = pen.measure(t.previewBoxEdit, 16, true) + 58;
+        for (const char* label : {t.previewBoxAutoLeft, t.previewBoxAutoRight}) {
+            itemW = std::max(itemW, pen.measure(label, 15, false) + 32);
+        }
+        itemW = std::min(itemW, spaceW);
+        const double itemGap = 10;
+        const double pictureY = top + eyeH + 6 + chipsH + 10;
+        const double itemX = kInnerX + half - itemW / 2;
+        double itemY = pictureY + (pictureSide - (rowH * 3 + itemGap * 2)) / 2;
+        drawToggle(pen, itemX, itemY, itemW, rowH, t.previewBoxEdit, {PanelAction::PreviewBoxEdit, nullptr, 0}, true,
+                   true);
+        itemY += rowH + itemGap;
+        drawButton(pen, itemX, itemY, itemW, rowH, t.previewBoxAutoLeft, {PanelAction::PreviewBoxAuto, nullptr, 0},
+                   es.searchBoxFixed[0], false, 15);
+        itemY += rowH + itemGap;
+        drawButton(pen, itemX, itemY, itemW, rowH, t.previewBoxAutoRight, {PanelAction::PreviewBoxAuto, nullptr, 1},
+                   es.searchBoxFixed[1], false, 15);
+    } else if (pictures) {
         using eye_preview::Mark;
         const struct {
             const char* label;
@@ -9085,14 +9204,22 @@ void EyePanel::drawPreview(const Pen& pen, const UiText& t, const PanelModel& m)
         const double spaceW = half - pictureSide - 2 * gap;
         double switchW = 0;
         for (const auto& s : switches) switchW = std::max(switchW, pen.measure(s.label, 16, true) + 58);
+        // With an eyecam-rec that takes search areas, "Set search area" under them (all four a little lower)
+        if (boxes) switchW = std::max(switchW, pen.measure(t.previewBoxEdit, 16, false) + 32);
         switchW = std::min(switchW, spaceW);
-        const double switchGap = 10;
+        const double itemH = boxes ? 36 : rowH;
+        const double switchGap = boxes ? 8 : 10;
+        const int count = boxes ? 4 : 3;
         const double pictureY = top + eyeH + 6 + chipsH + 10;
-        double switchY = pictureY + (pictureSide - (rowH * 3 + switchGap * 2)) / 2;
+        double switchY = pictureY + (pictureSide - (itemH * count + switchGap * (count - 1))) / 2;
         for (const auto& s : switches) {
-            drawToggle(pen, kInnerX + half - switchW / 2, switchY, switchW, rowH, s.label,
+            drawToggle(pen, kInnerX + half - switchW / 2, switchY, switchW, itemH, s.label,
                        {PanelAction::PreviewMark, nullptr, static_cast<int>(s.mark)}, s.on, true);
-            switchY += rowH + switchGap;
+            switchY += itemH + switchGap;
+        }
+        if (boxes) {
+            drawButton(pen, kInnerX + half - switchW / 2, switchY, switchW, itemH, t.previewBoxEdit,
+                       {PanelAction::PreviewBoxEdit, nullptr, 0}, true, false, 16);
         }
     }
 
@@ -9108,7 +9235,13 @@ void EyePanel::drawPreview(const Pen& pen, const UiText& t, const PanelModel& m)
     }
     pen.text(kInnerX, footer, gaze, fitSize(pen, gaze, 15, 11, kInnerRight - kInnerX, true), kText, true);
     const char* note = pictures ? t.previewNotePicture : t.previewNoteShape;
-    pen.text(kInnerX, footer + 22, note, fitSize(pen, note, 14, 10, kInnerRight - kInnerX, false), kTextMuted);
+    Color noteColor = kTextMuted;
+    if (pictures && previewBoxEdit_) {
+        // Drawing search areas: how, or why the last box wasn't used
+        note = boxRefused_ ? t.previewBoxRefused : boxSmall_ ? t.previewBoxTooSmall : t.previewNoteBoxEdit;
+        if (boxRefused_ || boxSmall_) noteColor = kWarning;
+    }
+    pen.text(kInnerX, footer + 22, note, fitSize(pen, note, 14, 10, kInnerRight - kInnerX, false), noteColor);
 }
 
 void EyePanel::render(const PanelModel& model) {

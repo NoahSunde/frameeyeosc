@@ -72,6 +72,12 @@ struct UiText {
     const char* previewMarkLids;        ///< the switches for the marks over them: the eyelids' (and their value)...
     const char* previewMarkPupil;       ///< ...the ring on the pupil...
     const char* previewMarkWindow;      ///< ...the frame the pupil is looked for in
+    const char* previewBoxEdit;         ///< the button that starts drawing the eyes' fixed search areas (and, on, ends it)
+    const char* previewBoxAutoLeft;     ///< ...while drawing: the left eye's search area back to automatic
+    const char* previewBoxAutoRight;    ///< ...the right eye's
+    const char* previewNoteBoxEdit;     ///< the footer while drawing: how, and what a fixed area does
+    const char* previewBoxTooSmall;     ///< ...the box let go of was too small to use
+    const char* previewBoxRefused;      ///< ...eyecam-rec refused it (an older or busy camera tool)
     const char* previewFreeze;          ///< stop the drawing where it is
     const char* previewResume;          ///< ...and let it move again
     const char* previewLidFormat;       ///< an eye's chip: its eyelid (%.2f)
