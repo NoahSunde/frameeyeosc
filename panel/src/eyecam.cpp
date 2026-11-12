@@ -837,7 +837,7 @@ std::string searchBoxCommand(int eye, const double box[4]) {
     const long side = static_cast<long>(kFrameSide);
     const long least = static_cast<long>(kSearchBoxMin);
     if (v[0] < 0 || v[1] < 0 || v[2] > side || v[3] > side || v[2] - v[0] < least || v[3] - v[1] < least) return "";
-    char text[96];
+    char text[128];  // (room for any long, though the checks above keep each within 0..400)
     std::snprintf(text, sizeof(text), "set search_box %s %ld %ld %ld %ld", eye == 0 ? "left" : "right", v[0], v[1],
                   v[2], v[3]);
     return text;
