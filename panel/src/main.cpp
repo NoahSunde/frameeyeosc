@@ -3799,6 +3799,9 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
         case PanelAction::PreviewMirror:
         case PanelAction::PreviewCamera:
         case PanelAction::PreviewMark:
+        case PanelAction::PreviewBoxEdit:
+        case PanelAction::PreviewBoxDraw:
+        case PanelAction::PreviewBoxAuto:
         case PanelAction::PreviewFreeze: return;  // handled inside the panel; the loop follows previewOpen
         case PanelAction::RecordOpen: openRecordView(model, panel.recordShown()); return;
         case PanelAction::RecordsAll: loadRecords(model); return;
