@@ -872,6 +872,11 @@ UiText makeJapanese() {
     t.blinkBothHint = "0 でオフ";
     t.blinkBothNote = "片目が閉じたとき、もう片方もこれより閉じてたら両目で閉じるよ（ウインクは通す）";
     t.rowLidFloor = "細めたときのまぶたの下限";
+    t.rowLoneDrop = "片目だけの閉じを無視";
+    t.loneDropHint = "試しの機能";
+    t.loneDropNote = "Valve が片目だけ閉じたと読んでも、その目のカメラが開いてると見てて、もう片方も開いてたら閉じないよ。"
+                     "目のカメラは毎秒 90 がおすすめ";
+    t.loneDropSlowFormat = "目のカメラが毎秒 %.0f だよ。「詳細」" ICON_CHEVRON_RIGHT "「困ったとき」で「いつも毎秒 90」にしてね";
     t.lidFloorHint = "0 でオフ";
     t.lidFloorNote = "目のカメラが開いてると見てるあいだ、これより閉じないよ（まばたきはちゃんと閉じる）";
     t.lidFloorNoteIdle = "目のカメラが目を見てるときに効くよ（今は Valve の値だけなので変わらない）";
@@ -2086,6 +2091,12 @@ UiText makeEnglish() {
     t.blinkBothHint = "0 = off";
     t.blinkBothNote = "When one eye closes and the other is closed past this, both close (winks pass through)";
     t.rowLidFloor = "Lowest eyelid when narrowed";
+    t.rowLoneDrop = "Ignore one-eye drops";
+    t.loneDropHint = "Experimental";
+    t.loneDropNote = "When Valve reads one eye shut but its camera sees it open (and the other eye is open), it "
+                     "stays open. Best with the cameras at 90 a second";
+    t.loneDropSlowFormat =
+        "The cameras run at %.0f a second: set \"Always 90 a second\" under Advanced " ICON_CHEVRON_RIGHT " Having trouble";
     t.lidFloorHint = "0 = off";
     t.lidFloorNote = "While the eye camera sees the eye open, it closes no further than this (blinks still close)";
     t.lidFloorNoteIdle = "Works while the eye cameras watch the eyes (now Valve's values only, so no change)";

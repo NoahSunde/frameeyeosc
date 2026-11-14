@@ -111,6 +111,9 @@ constexpr const char* kBlinkHoldMs = "blink_hold_ms";
 constexpr const char* kDespike = "despike";
 constexpr const char* kBlinkSyncBelow = "blink_sync_below";
 constexpr const char* kCameraLidFloor = "camera_lid_floor";
+/** Experimental: one eye Valve reads closing alone while its camera sees it open takes the camera's eyelid at once
+ * (the Eyelids tab's Blinks & squint, "Ignore one-eye drops"). Off by default. */
+constexpr const char* kCameraLoneDrop = "camera_lone_drop";
 constexpr const char* kLidOpenSnap = "lid_open_snap";
 constexpr const char* kCameraLidOpenSnap = "camera_lid_open_snap";
 constexpr const char* kGazeOffsetX = "gaze_offset_x";

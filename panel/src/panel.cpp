@@ -4530,6 +4530,32 @@ void EyePanel::drawLidsBlinks(const Pen& pen, const UiText& t, const PanelModel&
         }
         y += kRowH;
         drawRowDivider(pen, y);
+        // Experimental: one eye Valve reads closing alone while its camera sees it open is no blink (camera_lone_drop).
+        // Beside it what it does, or, while it is on and the cameras are slow, how to make them 90 a second
+        {
+            const bool lockedDrop = v.locked(key::kCameraLoneDrop);
+            const bool on = v.flag(key::kCameraLoneDrop);
+            drawRowLabel(pen, t, y, kRowH, t.rowLoneDrop, t.loneDropHint, lockedDrop);
+            const double switchW = 172;
+            drawSegmented(pen, kControlX, y + cy, switchW, kControlH,
+                          {{t.widenSwitchOn, {PanelAction::SetBool, key::kCameraLoneDrop, 1}},
+                           {t.widenSwitchOff, {PanelAction::SetBool, key::kCameraLoneDrop, 0}}},
+                          on ? 0 : 1, 18, lockedDrop);
+            const double fps = eyecam::cameraFps(m.eyecam.status);
+            const bool slow = on && fps < eyecam::kLowCameraFps;
+            char slowText[192] = "";
+            if (slow) std::snprintf(slowText, sizeof(slowText), t.loneDropSlowFormat, fps);
+            const double nx = kControlX + switchW + 16;
+            const std::vector<std::string> lines =
+                wrapText(pen, slow ? slowText : t.loneDropNote, 13, false, kInnerRight - nx, 3);
+            double baseline = y + kRowH / 2 + 4 - (static_cast<double>(lines.size()) - 1) * 8.5;
+            for (const std::string& line : lines) {
+                pen.text(nx, baseline, line, 13, slow ? kWarning : kTextMuted);
+                baseline += 17;
+            }
+            y += kRowH;
+            drawRowDivider(pen, y);
+        }
     }
 }
 

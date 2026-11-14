@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.2-box.2 (2026-11-13)
+
+Experimental: "Ignore one-eye drops" on the Eyelids tab. When Valve reads one eye shut but that eye's camera sees it open, the eye no longer blinks shut for 0.3 s before a squint shows. Blinks and winks still close.
+
+日本語: 試しの機能「片目だけの閉じを無視」をまぶたタブに足しました。Valve が片目だけ閉じたと読んでも、その目のカメラが開いていると見ていれば、細める前に 0.3 秒まばたきすることがなくなります。まばたきとウインクはちゃんと閉じます。
+
+- New, experimental, off by default: "Ignore one-eye drops" (Eyelids › Blinks & squint, `camera_lone_drop`, `--camera-lone-drop`)
+  - For an eye whose Valve reading drops to its minimum with small eyelid movements: until now such an eye went out closed for 0.3 s (the time a blink would take) and was held shut for the blink hold, then jumped up to the camera's eyelid, so a squint began with a one-eye blink
+  - With it on, the eye takes its camera's eyelid at once while the other eye looks open (Valve reads it open, or the camera already has its eyelid) and the other eye's camera doesn't see it closed
+  - Blinks close as before when Valve reads both eyes closing, and otherwise once the cameras see the eyes closed (a few frames later). A wink closes once that eye's camera sees it closed too, without waiting 0.2 s for the camera's own wink check
+  - Best with the eye cameras at 90 a second: while it is on and they run below 60, the line beside it says to set "Always 90 a second" (Advanced › Having trouble)
+
 ## 0.10.2-box.1 (2026-11-12)
 
 You can now fix where the eye cameras look for each pupil. Something dark elsewhere in the picture can then no longer be taken for the pupil and pull the search area onto it. Draw the area on the eye preview; "automatic" puts it back.

@@ -870,6 +870,10 @@ struct UiText {
     const char* widenSwitchOn;  ///< ...its two choices
     const char* widenSwitchOff;
     const char* widenNoteOff;  ///< the line under the slider while widening is off (the slider greyed)
+    const char* rowLoneDrop;  ///< one-eye drops taken from the camera (camera_lone_drop; choices widenSwitchOn / Off)...
+    const char* loneDropHint;  ///< ...its hint (experimental)
+    const char* loneDropNote;  ///< ...what it does, beside its choices (up to three lines)
+    const char* loneDropSlowFormat;  ///< ...in its place while the cameras are slow (%.0f: frames a second)
     const char* rowBrowFromWiden;  ///< brows raised with widening (brow_from_widen; choices widenSwitchOn / Off)...
     const char* browFromWidenHint;  ///< ...its hint
     const char* browFromWidenNote;  ///< ...what it does, under its choices (up to three lines; a "\n" breaks one)

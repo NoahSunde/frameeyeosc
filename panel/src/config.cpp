@@ -167,6 +167,7 @@ const std::vector<SettingSpec>& settingSpecs() {
         {key::kDespike, SettingType::Bool, 1, "", 0, 1, 1, 0},
         {key::kBlinkSyncBelow, SettingType::Number, 0.35, "", 0.0, 0.75, 0.05, 2},
         {key::kCameraLidFloor, SettingType::Number, 0.0, "", 0.0, 0.75, 0.05, 2},
+        {key::kCameraLoneDrop, SettingType::Bool, 0, "", 0, 1, 1, 0},
         {key::kLidOpenSnap, SettingType::Number, 0.53, "", 0.0, 0.75, 0.01, 2},
         {key::kCameraLidOpenSnap, SettingType::Number, 0.63, "", 0.0, 0.75, 0.01, 2},
         {key::kGazeOffsetX, SettingType::Number, 0.0, "", -0.5, 0.5, 0.005, 3},

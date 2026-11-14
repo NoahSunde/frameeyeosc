@@ -363,6 +363,11 @@ pub struct Settings {
     /// false: it is not, for a headset whose eye server reads a closed eye open and is sure of it. Looking to the side
     /// (CAMERA_SIDE_DEG) is checked either way.
     pub camera_closed_doubt: bool,
+    /// Experimental: an eye the eye server reads closing while that eye's camera sees it open takes the camera's
+    /// eyelid at once (no grace period, no blink hold) as long as the other eye looks open, so a one-eye drop of the
+    /// eye server's reading (a squint it reads as shut) is no blink; see main.rs, Smoother::check_lids. Blinks then
+    /// come from the other eye closing too or from the cameras' "closed". Best with the cameras at 90 a second.
+    pub camera_lone_drop: bool,
     /// How the pupil dilation goes to VRChat besides the float: 0 = only the float, 1..=4 = also as that many bool
     /// parameters (PupilDilation1, 2, 4, 8), for avatars that take it bit-packed the way VRCFT does. One value for
     /// every avatar: the headset can't see which parameters the avatar has.
@@ -486,6 +491,7 @@ impl Default for Settings {
             pupils_to_vrchat: true,
             camera_close_gate: true,
             camera_closed_doubt: true,
+            camera_lone_drop: false,
             pupil_bits: 0,
             lid_widen: Widen::Normal,
             widen: true,
@@ -983,6 +989,7 @@ pub fn apply_args(settings: &mut Settings, args: &Args, given: &HashSet<String>)
         settings.camera_closed_doubt = !args.no_camera_closed_doubt;
         locked.push("camera_closed_doubt");
     }
+    pin!(camera_lone_drop);
     pin!(
         blink_sync_below,
         camera_lid_floor,
@@ -1685,6 +1692,16 @@ mod tests {
         let (settings, locked) = merged(r#"{"camera_close_gate": true}"#, &["--no-camera-close-gate"]).unwrap();
         assert!(!settings.camera_close_gate);
         assert_eq!(locked, ["camera_close_gate"]);
+    }
+
+    #[test]
+    fn the_camera_lone_drop_is_off_until_turned_on() {
+        assert!(!merged("{}", &[]).unwrap().0.camera_lone_drop);
+        assert!(merged(r#"{"camera_lone_drop": true}"#, &[]).unwrap().0.camera_lone_drop);
+        assert!(merged(r#"{"camera_lone_drop": 1}"#, &[]).is_err());
+        let (settings, locked) = merged(r#"{"camera_lone_drop": false}"#, &["--camera-lone-drop"]).unwrap();
+        assert!(settings.camera_lone_drop);
+        assert_eq!(locked, ["camera_lone_drop"]);
     }
 
     #[test]

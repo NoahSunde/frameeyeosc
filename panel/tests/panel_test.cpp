@@ -1011,6 +1011,10 @@ void testLidsPages(const FontSet& fonts) {
                     CHECK(hits(panel, PanelAction::Step, key::kBlinkHoldMs).empty() == !blinks);
                     CHECK(hits(panel, PanelAction::Step, key::kBlinkSyncBelow).empty() == !blinks);
                     CHECK(hits(panel, PanelAction::Step, key::kCameraLidFloor).size() == (blinks && eyecam ? 1u : 0u));
+                    // ...and, with the cameras too, "Ignore one-eye drops" (camera_lone_drop, off by default): On, Off
+                    const std::vector<EyePanel::HitArea> lone = hits(panel, PanelAction::SetBool, key::kCameraLoneDrop);
+                    CHECK(lone.size() == (blinks && eyecam ? 2u : 0u));
+                    if (lone.size() == 2) CHECK(lone[0].hit.arg == 1 && lone[1].hit.arg == 0);
                     // Valve eyelids: the scales, the two marks (no widening marks), the smoothing values, and the
                     // auto calibration for eyes without a fit, unless the cameras drive both
                     CHECK(hits(panel, PanelAction::ScaleAuto).size() == (fine ? 1u : 0u));
@@ -2480,6 +2484,7 @@ void testCameraRows(const FontSet& fonts) {
         panel.setLidsPage(LidsPage::Blinks);
         panel.render(none);
         CHECK(hits(panel, PanelAction::Step, key::kCameraLidFloor).empty() && inCard(panel));
+        CHECK(hits(panel, PanelAction::SetBool, key::kCameraLoneDrop).empty());
         panel.setLidsPage(LidsPage::Fine);
         panel.render(none);
         CHECK(!inCard(panel));  // nothing there only for the cameras
@@ -2551,6 +2556,24 @@ void testCameraRows(const FontSet& fonts) {
         used.setLidsPage(LidsPage::Blinks);
         used.render(on);
         CHECK(hits(used, PanelAction::Step, key::kCameraLidFloor).size() == 1 && !inCard(used));
+        CHECK(hits(used, PanelAction::SetBool, key::kCameraLoneDrop).size() == 2 && allInsideAndTall(used));
+        // Pressing "On" asks for camera_lone_drop = true; on, it stays pressable (and so while the cameras are slow,
+        // where the line beside it says how to make them 90 a second); locked by the command line, nothing to press
+        {
+            const PanelHit press = pressArg(used, PanelAction::SetBool, 1);
+            CHECK(press.action == PanelAction::SetBool && press.arg == 1 && std::string(press.key) == key::kCameraLoneDrop);
+            PanelModel lone = on;
+            lone.config.root.set(key::kCameraLoneDrop, JsonValue::makeBool(true));
+            for (const double fps : {90.0, 15.0}) {
+                lone.eyecam.status.hasCamFps = true;
+                lone.eyecam.status.camFps[0] = lone.eyecam.status.camFps[1] = fps;
+                used.render(lone);
+                CHECK(hits(used, PanelAction::SetBool, key::kCameraLoneDrop).size() == 2 && allInsideAndTall(used));
+            }
+            lone.status.locked.push_back(key::kCameraLoneDrop);
+            used.render(lone);
+            CHECK(hits(used, PanelAction::SetBool, key::kCameraLoneDrop).empty());
+        }
         used.setTab(PanelTab::Output);
         used.render(on);
         CHECK(hits(used, PanelAction::SetBool, key::kPupilsToVrchat).size() == 2);
